@@ -111,43 +111,57 @@ def validate_required_columns(df: pd.DataFrame, required_cols: list) -> bool:
 
 
 def preprocess_data(df: pd.DataFrame,
-                    target_column: str = "fraud_reported") -> pd.DataFrame:
+                    target_column: str = "fraud_reported",
+                    cap_outliers: bool = True) -> pd.DataFrame:
     """
     Cleans and preprocesses the dataset:
-    - Handles missing values
-    - Limits extreme outliers
-    - Encodes categorical columns
-    - Scales numeric columns
+      - Converts 'Y'/'N' target to 1/0 if needed
+      - Logs columns with missing values
+      - Imputes numeric columns (median) and categorical columns (mode)
+      - Optionally caps outliers in 'umbrella_limit'
+      - Encodes categorical columns
+      - Scales numeric columns
 
     :param df: Input DataFrame
     :param target_column: Name of the target column
+    :param cap_outliers: Whether to cap outliers for 'umbrella_limit'
     :return: Preprocessed DataFrame
     """
     if df.empty:
-        logging.warning("Received empty DataFrame for preprocessing. "
-                        "Skipping.")
+        logging.warning("Received empty DataFrame for preprocessing. Skipping.")
         return df
 
-    # Example: Convert 'Y'/'N' to 1/0 (adjust as needed)
+    # Convert target from 'Y'/'N' to 1/0
     if df[target_column].dtype == object:
         df[target_column] = df[target_column].map({'Y': 1, 'N': 0})
 
-    # Handle missing values
-    for col in df.columns:
-        if df[col].dtype in ['float64', 'int64']:
-            df[col].fillna(df[col].median(), inplace=True)
-        else:
-            df[col].fillna(df[col].mode()[0], inplace=True)
+    # Identify missing values
+    missing_counts = df.isnull().sum()
+    for col, count in missing_counts.items():
+        if count > 0:
+            logging.info(f"Column '{col}' has {count} missing values. Imputing...")
 
-    # Example outlier handling for 'umbrella_limit'
-    if 'umbrella_limit' in df.columns:
+    # Separate numeric vs categorical
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+
+    # Impute numeric columns
+    for col in numeric_cols:
+        df[col].fillna(df[col].median(), inplace=True)
+
+    # Impute categorical columns
+    for col in categorical_cols:
+        df[col].fillna(df[col].mode()[0], inplace=True)
+
+    # Outlier capping
+    if cap_outliers and 'umbrella_limit' in df.columns:
         q_high = df['umbrella_limit'].quantile(0.99)
         df.loc[df['umbrella_limit'] > q_high, 'umbrella_limit'] = q_high
+        logging.info("Applied outlier capping on 'umbrella_limit' at 99th percentile.")
 
     # Encode categorical features
-    cat_cols = df.select_dtypes(include=['object']).columns
     label_encoders = {}
-    for col in cat_cols:
+    for col in categorical_cols:
         le = LabelEncoder()
         try:
             df[col] = le.fit_transform(df[col].astype(str))
@@ -155,16 +169,16 @@ def preprocess_data(df: pd.DataFrame,
         except Exception as e:
             logging.error(f"Error encoding column '{col}': {e}")
 
-    # Scale numeric columns
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if target_column in num_cols:
-        num_cols.remove(target_column)
+    # Scale numeric columns, excluding target if present
+    if target_column in numeric_cols:
+        numeric_cols.remove(target_column)
 
     scaler = StandardScaler()
-    df[num_cols] = scaler.fit_transform(df[num_cols])
+    df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
 
     logging.info("Data preprocessing complete.")
     return df
+
 
 
 def eda_plots(df: pd.DataFrame, target_column: str = "fraud_reported"):
@@ -212,23 +226,27 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def select_top_features(df: pd.DataFrame, target: str, top_n: int = 20):
+def select_top_features(df: pd.DataFrame, target: str, top_n: int = 20, log_importances: bool = True):
     """
     Select top N features based on RandomForest importance.
 
     :param df: DataFrame including target
     :param target: Target column name
     :param top_n: Number of top features to keep
+    :param log_importances: Whether to log the sorted feature importances
     :return: List of top feature names
     """
     if df.empty:
         logging.warning("Feature selection skipped. DataFrame is empty.")
         return []
 
+    if target not in df.columns:
+        logging.error(f"Target '{target}' not found in DataFrame.")
+        return []
+
     X_temp = df.drop(target, axis=1)
     y_temp = df[target]
 
-    # Quick check for minimal shape
     if X_temp.shape[1] < 1:
         logging.error("No features available for feature selection.")
         return []
@@ -240,12 +258,18 @@ def select_top_features(df: pd.DataFrame, target: str, top_n: int = 20):
         features = X_temp.columns
         feat_imp = sorted(zip(features, importances),
                           key=lambda x: x[1], reverse=True)
+        if log_importances:
+            logging.info("All Feature Importances (sorted):")
+            for f, imp in feat_imp:
+                logging.info(f"  {f}: {imp:.5f}")
+
         top_features = [f[0] for f in feat_imp[:top_n]]
         logging.info(f"Selected top {top_n} features via RandomForest.")
         return top_features
     except Exception as e:
         logging.error(f"Error in feature selection: {e}")
         return []
+
 
 
 def evaluate_model(y_true, y_pred, model_name="Model"):
@@ -278,7 +302,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     # SUPERVISED MODELS
     # -------------------
     models = {
-        "Logistic Regression": LogisticRegression(),
+        "Logistic Regression": LogisticRegression(random_state=42),
         "Random Forest": RandomForestClassifier(random_state=42),
         "XGBoost": XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss')
     }
@@ -294,7 +318,9 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     # -------------------
     # UNSUPERVISED MODELS
     # -------------------
-    # Isolation Forest
+    logging.info("Evaluating Unsupervised Models (treating outliers or clusters as 'fraud')")
+
+    # 1) Isolation Forest
     try:
         iso_forest = IsolationForest(contamination=0.01, random_state=42)
         iso_forest.fit(X_train)
@@ -305,13 +331,12 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     except Exception as e:
         logging.error(f"Error training Isolation Forest: {e}")
 
-    # K-Means
+    # 2) K-Means
     try:
         kmeans = KMeans(n_clusters=2, random_state=42)
         kmeans.fit(X_train)
         y_pred_km = kmeans.predict(X_test)
-        # One of the clusters might correspond to fraud. We can't know a priori
-        # so treat cluster "1" as fraud (arbitrary). Adjust based on EDA or domain knowledge.
+        # Assume cluster "1" is fraud, cluster "0" is not
         evaluate_model(y_test, y_pred_km, "K-Means")
     except Exception as e:
         logging.error(f"Error training K-Means: {e}")
@@ -385,39 +410,36 @@ def explain_model_shap(model, X_test):
 ##############################################################################
 def main():
     # === Step 1: Load Data ===
-    file_path = "insurance_claims.csv"  # Update if needed
+    file_path = "insurance_claims.csv"  # Or pass as argument
     df = load_dataset(file_path)
     if df.empty:
         logging.error("Exiting due to empty dataset.")
         return  # Exit if we can't proceed
 
-    # Optional: Ensure certain columns exist
-    required_columns = ["months_as_customer", "age", "policy_number",
-                        "fraud_reported"]  # Example required set
+    # === Step 2: Validate Required Columns ===
+    required_columns = ["months_as_customer", "age", "policy_number", "fraud_reported"]
     if not validate_required_columns(df, required_columns):
         logging.error("Exiting due to missing required columns.")
         return
 
-    # === Step 2: Preprocess Data ===
+    # === Step 3: Preprocess Data ===
     df = preprocess_data(df, target_column="fraud_reported")
 
-    # === Step 3: EDA ===
+    # === Step 4: EDA ===
     eda_plots(df, target_column="fraud_reported")
 
-    # === Step 4: Feature Engineering ===
+    # === Step 5: Feature Engineering ===
     df = feature_engineering(df)
 
-    # === Step 5: Feature Selection (Optional) ===
+    # === Step 6: Feature Selection (Optional) ===
     top_features = select_top_features(df, target="fraud_reported", top_n=20)
     if top_features:
         df = df[top_features + ["fraud_reported"]]
 
-    # === Step 6: Train-Test Split & Handling Imbalance ===
+    # === Step 7: Train-Test Split & Handle Imbalance ===
     X = df.drop("fraud_reported", axis=1)
     y = df["fraud_reported"]
 
-    # Use SMOTE for balancing
-    from imblearn.over_sampling import SMOTE
     sm = SMOTE(random_state=42)
     try:
         X_res, y_res = sm.fit_resample(X, y)
@@ -429,17 +451,16 @@ def main():
         X_res, y_res, test_size=0.2, random_state=42
     )
 
-    # === Step 7: Train & Evaluate Models ===
+    # === Step 8: Train & Evaluate Models ===
     train_and_evaluate_models(X_train, X_test, y_train, y_test)
 
-    # === Step 8: Hyperparameter Tuning for RandomForest ===
+    # === Step 9: Hyperparameter Tuning (Optional) ===
     best_rf = hyperparameter_tuning_rf(X_train, X_test, y_train, y_test)
 
-    # === Step 9: Model Interpretation (SHAP) ===
+    # === Step 10: Model Interpretation (SHAP) ===
     if best_rf is not None:
         explain_model_shap(best_rf, X_test)
 
 
-# Execute the pipeline
 if __name__ == "__main__":
     main()
