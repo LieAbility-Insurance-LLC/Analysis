@@ -17,8 +17,9 @@ from imblearn.over_sampling import SMOTE
 from data_handling import load_dataset, validate_required_columns
 from preprocessing import preprocess_data, eda_plots
 from feature_engineering import feature_engineering, select_top_features
-from model_training import train_and_evaluate_models, hyperparameter_tuning_rf
+from model_training import train_and_evaluate_models, hyperparameter_tuning_rf, evaluate_unsupervised_model
 from evaluation import explain_model_shap
+from sklearn.ensemble import IsolationForest  # Needed to instantiate the unsupervised model
 
 def main():
     # === Step 1: Load Data ===
@@ -69,10 +70,17 @@ def main():
     # === Step 9: Hyperparameter Tuning (Optional) ===
     best_rf = hyperparameter_tuning_rf(X_train, X_test, y_train, y_test)
 
+    # === Additional: Evaluate Unsupervised Model using continuous anomaly scores ===
+    try:
+        iso_forest = IsolationForest(contamination=0.01, random_state=42)
+        iso_forest.fit(X_train)
+        evaluate_unsupervised_model(iso_forest, X_test, y_test, model_name="Isolation Forest (Standalone Evaluation)")
+    except Exception as e:
+        logging.error(f"Error evaluating unsupervised model: {e}")
+
     # === Step 10: Model Interpretation (SHAP) ===
     if best_rf is not None:
         explain_model_shap(best_rf, X_test)
-
 
 if __name__ == "__main__":
     main()
