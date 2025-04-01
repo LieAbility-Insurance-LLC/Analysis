@@ -1,5 +1,3 @@
-# evaluation.py
-
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
@@ -33,7 +31,6 @@ def explain_model_shap(model, X_test):
     """
     import shap
     import matplotlib.pyplot as plt
-
     if not hasattr(shap, "TreeExplainer"):
         logging.warning("SHAP is not available or not imported. Skipping.")
         return
@@ -42,26 +39,24 @@ def explain_model_shap(model, X_test):
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_test)
 
-        # Handle binary classification SHAP output for different SHAP versions
+        # For multi-output (binary classification), use the 0-index
         if isinstance(shap_values, list):
-            shap_val_to_plot = shap_values[1]
-            expected_value = explainer.expected_value[1]
+            shap_val_to_plot = shap_values[0]
+            expected_value = explainer.expected_value[0]
         else:
             shap_val_to_plot = shap_values
             expected_value = explainer.expected_value
 
-        # Summary plot (bar)
+        # Create a summary bar plot of feature importances
         shap.summary_plot(shap_val_to_plot, X_test, plot_type="bar", show=False)
         plt.title("SHAP Feature Importance (Bar)")
         plt.show()
 
-        # Example single prediction explanation
+        # Generate force plot for a single prediction using the new API
         if len(X_test) > 0:
             sample_index = 0
-            # For force_plot, note that it might need shap.initjs() in a notebook
-            shap.force_plot(expected_value,
-                            shap_val_to_plot[sample_index, :],
-                            X_test.iloc[sample_index, :])
+            shap.plots.force(expected_value,
+                             shap_val_to_plot[sample_index, :],
+                             X_test.iloc[sample_index, :])
     except Exception as e:
         logging.error(f"Error generating SHAP plots: {e}")
-
