@@ -14,12 +14,7 @@ import streamlit as st
 from imblearn.over_sampling import SMOTE
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    roc_auc_score,
-)
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 # ──────────────────────────────────────────────────────────
@@ -54,6 +49,20 @@ def numeric_impute(df: pd.DataFrame) -> pd.DataFrame:
     return df_imp
 
 
+def align_to_model(X: pd.DataFrame, model) -> pd.DataFrame:
+    """
+    Align feature DataFrame to the feature order the model was trained on.
+    - Adds any missing columns (filled with 0)
+    - Drops any unseen columns
+    """
+    if hasattr(model, "feature_names_in_"):
+        cols = list(model.feature_names_in_)
+        X_aligned = X.reindex(columns=cols, fill_value=0)
+        return X_aligned
+    # Fallback: assume columns already match
+    return X
+
+
 @st.cache_data(show_spinner=False)
 def cached_preprocess(raw: pd.DataFrame) -> pd.DataFrame:
     """Preprocess + feature engineer (cached)."""
@@ -83,15 +92,11 @@ def pretty_confusion(cm: np.ndarray):
 # ──────────────────────────────────────────────────────────
 # Streamlit page config
 # ──────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Insurance Fraud Dashboard",
-    page_icon="🚦",
-    layout="wide",
-)
+st.set_page_config(page_title="Insurance Fraud Dashboard", page_icon="🚦", layout="wide")
 st.title("🚦 Insurance Claim Fraud Detection Dashboard")
 
 # ──────────────────────────────────────────────────────────
-# Sidebar: navigation
+# Sidebar navigation
 # ──────────────────────────────────────────────────────────
 section = st.sidebar.radio(
     "Navigate",
@@ -165,19 +170,23 @@ elif section == "Train":
 
                 plt.show = old_show
                 logging.getLogger().removeHandler(handler)
-
                 st.expander("Logs").text(buf.getvalue())
 
-                # Quick metrics for default RF
-                rf_pred = joblib.load(BEST_MODEL_PATH).predict(X_te)
-                acc = accuracy_score(y_te, rf_pred)
-                f1 = f1_score(y_te, rf_pred)
-                auc = roc_auc_score(y_te, rf_pred)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Accuracy", f"{acc:.3f}")
-                col2.metric("F1 Score", f"{f1:.3f}")
-                col3.metric("ROC AUC", f"{auc:.3f}")
-                pretty_confusion(confusion_matrix(y_te, rf_pred))
+                # Quick metrics using the stored RandomForest (aligned columns!)
+                if BEST_MODEL_PATH.exists():
+                    model = joblib.load(BEST_MODEL_PATH)
+                    X_te_aligned = align_to_model(X_te, model)
+                    rf_pred = model.predict(X_te_aligned)
+                    acc = accuracy_score(y_te, rf_pred)
+                    f1 = f1_score(y_te, rf_pred)
+                    auc = roc_auc_score(y_te, rf_pred)
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Accuracy", f"{acc:.3f}")
+                    col2.metric("F1 Score", f"{f1:.3f}")
+                    col3.metric("ROC AUC", f"{auc:.3f}")
+                    pretty_confusion(confusion_matrix(y_te, rf_pred))
+                else:
+                    st.warning("Pre‑trained model not found; metrics skipped.")
 
 # ──────────────────────────────────────────────────────────
 # 4 · Prediction
@@ -186,22 +195,22 @@ elif section == "Predict":
     st.header("4 · Prediction")
     if st.session_state.prep is None:
         st.info("Need preprocessed data.")
+    elif not BEST_MODEL_PATH.exists():
+        st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
     else:
-        if not BEST_MODEL_PATH.exists():
-            st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
-        else:
-            if st.button("Run prediction"):
-                with st.spinner("Predicting…"):
-                    model = joblib.load(BEST_MODEL_PATH)
-                    X_pred = st.session_state.prep.copy()
-                    if "fraud_reported" in X_pred.columns:
-                        X_pred = X_pred.drop("fraud_reported", axis=1)
-                    X_pred = numeric_impute(X_pred)
-                    preds = model.predict(X_pred)
-                    out = st.session_state.prep.copy()
-                    out["Prediction"] = preds
-                    st.session_state.pred_df = out
-                st.success("Prediction complete!")
+        if st.button("Run prediction"):
+            with st.spinner("Predicting…"):
+                model = joblib.load(BEST_MODEL_PATH)
+                X_pred = st.session_state.prep.copy()
+                if "fraud_reported" in X_pred.columns:
+                    X_pred = X_pred.drop("fraud_reported", axis=1)
+                X_pred = numeric_impute(X_pred)
+                X_pred = align_to_model(X_pred, model)
+                preds = model.predict(X_pred)
+                out = st.session_state.prep.copy()
+                out["Prediction"] = preds
+                st.session_state.pred_df = out
+            st.success("Prediction complete!")
 
         if st.session_state.pred_df is not None:
             st.dataframe(st.session_state.pred_df.head())
@@ -230,6 +239,7 @@ elif section == "Explain (SHAP)":
                 if "fraud_reported" in X_exp.columns:
                     X_exp = X_exp.drop("fraud_reported", axis=1)
                 X_exp = numeric_impute(X_exp)
+                X_exp = align_to_model(X_exp, model)
 
                 old_show = plt.show
                 plt.show = lambda *a, **kw: st.pyplot(plt.gcf(), clear_figure=True)
