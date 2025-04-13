@@ -1,6 +1,8 @@
 # ──────────────────────────────────────────────────────────
-# Insurance‑Fraud Streamlit Dashboard · app.py
+# Insurance‑Fraud Streamlit Dashboard · app.py  (v2.0)
 # ──────────────────────────────────────────────────────────
+from __future__ import annotations
+
 import io
 import logging
 import warnings
@@ -10,238 +12,295 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from imblearn.over_sampling import SMOTE
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    precision_recall_curve,
+    roc_auc_score,
+    roc_curve,
+)
 from sklearn.model_selection import train_test_split
 
 # ──────────────────────────────────────────────────────────
 # Silence noisy warnings
 # ──────────────────────────────────────────────────────────
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=(FutureWarning, RuntimeWarning, UserWarning))
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 pd.options.mode.chained_assignment = None
 
 # ──────────────────────────────────────────────────────────
 # Project‑specific imports
 # ──────────────────────────────────────────────────────────
-from feature_engineering import feature_engineering
-from model_training import train_and_evaluate_models
-from preprocessing import preprocess_data
 from evaluation import explain_model_shap
+from feature_engineering import feature_engineering
+from model_training import (
+    hyperparameter_tuning_rf,
+    train_and_evaluate_models,
+)
+from preprocessing import preprocess_data
 
 # ──────────────────────────────────────────────────────────
-# Utility helpers
+# Paths / constants
 # ──────────────────────────────────────────────────────────
 MODELS_DIR = Path("models")
 BEST_MODEL_PATH = MODELS_DIR / "best_rf_model.pkl"
+PLOTLY_TMPL = "plotly_dark" if st.get_option("theme.base") == "dark" else "plotly"
 
 
+# ──────────────────────────────────────────────────────────
+# Helper utilities
+# ──────────────────────────────────────────────────────────
 def numeric_impute(df: pd.DataFrame) -> pd.DataFrame:
-    """Coerce all columns to numeric, drop all‑NaN cols, median‑impute the rest."""
+    """Convert to numeric, drop all‑NaN columns, median‑impute."""
     df_num = df.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
-    imputer = SimpleImputer(strategy="median")
-    df_imp = pd.DataFrame(imputer.fit_transform(df_num), columns=df_num.columns)
-    return df_imp
+    imp = SimpleImputer(strategy="median")
+    return pd.DataFrame(imp.fit_transform(df_num), columns=df_num.columns)
 
 
 def align_to_model(X: pd.DataFrame, model) -> pd.DataFrame:
-    """
-    Align feature DataFrame to the feature order the model was trained on.
-    - Adds any missing columns (filled with 0)
-    - Drops any unseen columns
-    """
+    """Ensure column order matches model.feature_names_in_ (adds 0‑filled missing)."""
     if hasattr(model, "feature_names_in_"):
         cols = list(model.feature_names_in_)
-        X_aligned = X.reindex(columns=cols, fill_value=0)
-        return X_aligned
-    # Fallback: assume columns already match
+        return X.reindex(cols, axis=1, fill_value=0)
     return X
 
 
-@st.cache_data(show_spinner=False)
-def cached_preprocess(raw: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess + feature engineer (cached)."""
-    df = preprocess_data(raw.copy(), target_column="fraud_reported")
-    df = feature_engineering(df)
-    return df
-
-
-def pretty_confusion(cm: np.ndarray):
-    import seaborn as sns
-
-    fig, ax = plt.subplots(figsize=(4, 3))
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt="d",
-        cmap="Blues",
-        cbar=False,
-        ax=ax,
-        linewidths=0.5,
-    )
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    st.pyplot(fig, clear_figure=True)
+@st.cache_resource(show_spinner=False)
+def cached_preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df = preprocess_data(df_raw.copy(), target_column="fraud_reported")
+    return feature_engineering(df)
 
 
 # ──────────────────────────────────────────────────────────
-# Streamlit page config
+# Beautiful CSS injection
 # ──────────────────────────────────────────────────────────
-st.set_page_config(page_title="Insurance Fraud Dashboard", page_icon="🚦", layout="wide")
-st.title("🚦 Insurance Claim Fraud Detection Dashboard")
-
-# ──────────────────────────────────────────────────────────
-# Sidebar navigation
-# ──────────────────────────────────────────────────────────
-section = st.sidebar.radio(
-    "Navigate",
-    ["Upload & Preview", "Preprocess", "Train", "Predict", "Explain (SHAP)"],
+st.markdown(
+    """
+<style>
+/* center metrics */
+[data-testid="metric-container"] {text-align:center !important;}
+/* smoother plots */
+.plot-container > div {border-radius:12px !important;}
+/* subtle shadow for frames */
+section.main > div {box-shadow:0 0 8px rgba(0,0,0,0.07);}
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
+# ──────────────────────────────────────────────────────────
+# Page config
+# ──────────────────────────────────────────────────────────
+st.set_page_config("Fraud Dashboard", "🚦", layout="wide")
+st.title("🚦 Insurance Claim Fraud Detection Dashboard")
+
+# ──────────────────────────────────────────────────────────
 # Session state
-if "raw" not in st.session_state:
-    st.session_state.raw = None
-if "prep" not in st.session_state:
-    st.session_state.prep = None
-if "pred_df" not in st.session_state:
-    st.session_state.pred_df = None
+# ──────────────────────────────────────────────────────────
+ss = st.session_state
+ss.setdefault("raw", None)
+ss.setdefault("prep", None)
+ss.setdefault("model", None)  # tuned model
+ss.setdefault("pred_df", None)
 
 # ──────────────────────────────────────────────────────────
-# 1 · Upload & Preview
+# Tabs
 # ──────────────────────────────────────────────────────────
-if section == "Upload & Preview":
-    st.header("1 · Upload CSV")
-    file = st.file_uploader("Drop or select a CSV file", type=["csv"])
+tabs = st.tabs(
+    ["📁 Upload", "🔬 EDA", "⚙️ Preprocess", "🧠 Train", "📊 Predict", "🔎 Explain"]
+)
+tab_upload, tab_eda, tab_prep, tab_train, tab_pred, tab_explain = tabs
+
+# ──────────────────────────────────────────────────────────
+# 1 · Upload
+# ──────────────────────────────────────────────────────────
+with tab_upload:
+    st.header("📁 Upload dataset")
+    file = st.file_uploader("CSV only", type="csv")
     if file:
-        st.session_state.raw = pd.read_csv(file)
-        st.success(f"Loaded file – shape {st.session_state.raw.shape}")
-        st.dataframe(st.session_state.raw.head())
+        ss.raw = pd.read_csv(file)
+        st.toast("File loaded!", icon="✅")
+        st.dataframe(ss.raw.head(), use_container_width=True)
 
 # ──────────────────────────────────────────────────────────
-# 2 · Preprocess
+# 2 · EDA (quick insights)
 # ──────────────────────────────────────────────────────────
-elif section == "Preprocess":
-    st.header("2 · Preprocessing")
-    if st.session_state.raw is None:
-        st.info("Please upload a dataset first.")
+with tab_eda:
+    st.header("🔬 Exploratory Data Analysis")
+    if ss.raw is None:
+        st.info("Upload a dataset first.")
     else:
-        if st.button("Run preprocessing"):
-            with st.spinner("Processing…"):
-                st.session_state.prep = cached_preprocess(st.session_state.raw)
-            st.success("Done!")
-        if st.session_state.prep is not None:
-            st.write(f"Processed shape: {st.session_state.prep.shape}")
-            st.dataframe(st.session_state.prep.head())
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Class balance")
+            fig = px.histogram(
+                ss.raw,
+                x="fraud_reported",
+                template=PLOTLY_TMPL,
+                color="fraud_reported",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.subheader("Correlation heat‑map")
+            corr = ss.raw.select_dtypes("number").corr()
+            fig = px.imshow(
+                corr,
+                template=PLOTLY_TMPL,
+                aspect="auto",
+                color_continuous_scale="Blues",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────────
-# 3 · Model Training
+# 3 · Preprocess
 # ──────────────────────────────────────────────────────────
-elif section == "Train":
-    st.header("3 · Model Training")
-    if st.session_state.prep is None:
+with tab_prep:
+    st.header("⚙️ Preprocess + Feature Engineering")
+    if ss.raw is None:
+        st.info("Upload a dataset first.")
+    elif st.button("Run preprocessing", key="prep_btn"):
+        with st.spinner("Preprocessing…"):
+            ss.prep = cached_preprocess(ss.raw)
+        st.success("Done ✔️")
+    if ss.prep is not None:
+        st.write(f"Shape: {ss.prep.shape}")
+        st.dataframe(ss.prep.head(), use_container_width=True)
+
+# ──────────────────────────────────────────────────────────
+# 4 · Train
+# ──────────────────────────────────────────────────────────
+with tab_train:
+    st.header("🧠 Model Training & Tuning")
+    if ss.prep is None:
         st.info("Run preprocessing first.")
     else:
-        if st.button("Train models"):
-            with st.spinner("Training… this may take a minute"):
-                df = st.session_state.prep.copy().dropna(subset=["fraud_reported"])
-                X = df.drop("fraud_reported", axis=1)
-                y = df["fraud_reported"]
-
+        tune = st.toggle("Hyperparameter tuning (GridSearch)", value=True)
+        if st.button("Start training", key="train_btn"):
+            with st.spinner("Training…"):
+                df = ss.prep.copy().dropna(subset=["fraud_reported"])
+                X, y = df.drop("fraud_reported", axis=1), df["fraud_reported"]
                 X_imp = numeric_impute(X)
                 X_bal, y_bal = SMOTE(random_state=42).fit_resample(X_imp, y)
                 X_tr, X_te, y_tr, y_te = train_test_split(
                     X_bal, y_bal, test_size=0.2, random_state=42
                 )
 
-                # Capture logs
+                # Capture training logs
                 buf = io.StringIO()
                 handler = logging.StreamHandler(buf)
                 logging.getLogger().addHandler(handler)
-
-                old_show = plt.show
-                plt.show = lambda *a, **kw: st.pyplot(plt.gcf(), clear_figure=True)
+                plt_show_orig = plt.show
+                plt.show = lambda *a, **k: st.pyplot(plt.gcf(), clear_figure=True)
 
                 train_and_evaluate_models(X_tr, X_te, y_tr, y_te)
 
-                plt.show = old_show
+                best_model = None
+                if tune:
+                    best_model = hyperparameter_tuning_rf(X_tr, X_te, y_tr, y_te)
+                plt.show = plt_show_orig
                 logging.getLogger().removeHandler(handler)
                 st.expander("Logs").text(buf.getvalue())
 
-                # Quick metrics using the stored RandomForest (aligned columns!)
-                if BEST_MODEL_PATH.exists():
-                    model = joblib.load(BEST_MODEL_PATH)
-                    X_te_aligned = align_to_model(X_te, model)
-                    rf_pred = model.predict(X_te_aligned)
-                    acc = accuracy_score(y_te, rf_pred)
-                    f1 = f1_score(y_te, rf_pred)
-                    auc = roc_auc_score(y_te, rf_pred)
+                # Save tuned model if any
+                if best_model:
+                    MODELS_DIR.mkdir(exist_ok=True)
+                    joblib.dump(best_model, BEST_MODEL_PATH)
+                    ss.model = best_model
+                    st.toast("Tuned model saved.", icon="💾")
+                elif BEST_MODEL_PATH.exists():
+                    ss.model = joblib.load(BEST_MODEL_PATH)
+
+                # Quick metrics for chosen model
+                if ss.model:
+                    X_te_aligned = align_to_model(X_te, ss.model)
+                    preds = ss.model.predict(X_te_aligned)
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("Accuracy", f"{acc:.3f}")
-                    col2.metric("F1 Score", f"{f1:.3f}")
-                    col3.metric("ROC AUC", f"{auc:.3f}")
-                    pretty_confusion(confusion_matrix(y_te, rf_pred))
-                else:
-                    st.warning("Pre‑trained model not found; metrics skipped.")
+                    col1.metric("Accuracy", f"{accuracy_score(y_te, preds):.3f}")
+                    col2.metric("F1", f"{f1_score(y_te, preds):.3f}")
+                    col3.metric("ROC AUC", f"{roc_auc_score(y_te, preds):.3f}")
+
+                    # ROC curve
+                    fpr, tpr, _ = roc_curve(y_te, preds)
+                    fig = go.Figure(
+                        go.Scatter(x=fpr, y=tpr, mode="lines", name="ROC"),
+                        layout=dict(
+                            template=PLOTLY_TMPL,
+                            xaxis_title="FPR",
+                            yaxis_title="TPR",
+                            title="ROC Curve",
+                        ),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Confusion matrix
+                    cm = confusion_matrix(y_te, preds)
+                    fig_cm = px.imshow(
+                        cm,
+                        text_auto=True,
+                        color_continuous_scale="Blues",
+                        template=PLOTLY_TMPL,
+                    )
+                    fig_cm.update_layout(title="Confusion Matrix")
+                    st.plotly_chart(fig_cm, use_container_width=True)
+
+                    # Allow download
+                    with open(BEST_MODEL_PATH, "rb") as f:
+                        st.download_button(
+                            "Download tuned model", f, "best_rf_model.pkl"
+                        )
 
 # ──────────────────────────────────────────────────────────
-# 4 · Prediction
+# 5 · Predict
 # ──────────────────────────────────────────────────────────
-elif section == "Predict":
-    st.header("4 · Prediction")
-    if st.session_state.prep is None:
+with tab_pred:
+    st.header("📊 Batch Prediction")
+    if ss.prep is None:
         st.info("Need preprocessed data.")
     elif not BEST_MODEL_PATH.exists():
-        st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
+        st.error("No model found – train first.")
     else:
-        if st.button("Run prediction"):
+        if st.button("Predict", key="pred_btn"):
             with st.spinner("Predicting…"):
                 model = joblib.load(BEST_MODEL_PATH)
-                X_pred = st.session_state.prep.copy()
-                if "fraud_reported" in X_pred.columns:
-                    X_pred = X_pred.drop("fraud_reported", axis=1)
-                X_pred = numeric_impute(X_pred)
-                X_pred = align_to_model(X_pred, model)
-                preds = model.predict(X_pred)
-                out = st.session_state.prep.copy()
-                out["Prediction"] = preds
-                st.session_state.pred_df = out
-            st.success("Prediction complete!")
+                X_pred = ss.prep.drop(columns=["fraud_reported"], errors="ignore")
+                X_pred = align_to_model(numeric_impute(X_pred), model)
+                ss.pred_df = ss.prep.copy()
+                ss.pred_df["Prediction"] = model.predict(X_pred)
+            st.toast("Prediction complete!", icon="✅")
 
-        if st.session_state.pred_df is not None:
-            st.dataframe(st.session_state.pred_df.head())
-            csv = st.session_state.pred_df.to_csv(index=False).encode()
+        if ss.pred_df is not None:
+            st.dataframe(ss.pred_df.head(), use_container_width=True)
             st.download_button(
-                "Download predictions CSV",
-                csv,
+                "Download predictions",
+                ss.pred_df.to_csv(index=False).encode(),
                 "predictions.csv",
                 "text/csv",
             )
 
 # ──────────────────────────────────────────────────────────
-# 5 · SHAP Explanation
+# 6 · Explain
 # ──────────────────────────────────────────────────────────
-elif section == "Explain (SHAP)":
-    st.header("5 · Model Explainability")
-    if st.session_state.prep is None:
+with tab_explain:
+    st.header("🔎 SHAP Explainability")
+    if ss.prep is None:
         st.info("Need preprocessed data.")
     elif not BEST_MODEL_PATH.exists():
-        st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
+        st.error("No model found – train first.")
     else:
-        if st.button("Generate SHAP plots"):
-            with st.spinner("Calculating SHAP values…"):
+        if st.button("Generate SHAP", key="shap_btn"):
+            with st.spinner("Calculating SHAP…"):
                 model = joblib.load(BEST_MODEL_PATH)
-                X_exp = st.session_state.prep.copy()
-                if "fraud_reported" in X_exp.columns:
-                    X_exp = X_exp.drop("fraud_reported", axis=1)
-                X_exp = numeric_impute(X_exp)
-                X_exp = align_to_model(X_exp, model)
-
-                old_show = plt.show
-                plt.show = lambda *a, **kw: st.pyplot(plt.gcf(), clear_figure=True)
+                X_exp = ss.prep.drop(columns=["fraud_reported"], errors="ignore")
+                X_exp = align_to_model(numeric_impute(X_exp), model)
+                plt_show_orig = plt.show
+                plt.show = lambda *a, **k: st.pyplot(plt.gcf(), clear_figure=True)
                 explain_model_shap(model, X_exp)
-                plt.show = old_show
+                plt.show = plt_show_orig
