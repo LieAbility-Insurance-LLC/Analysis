@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────
-# Insurance‑Fraud Streamlit Dashboard · app.py  (v2.0)
+# Insurance‑Fraud Streamlit Dashboard · app.py  (v2.2)
 # ──────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -20,19 +20,24 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score,
-    average_precision_score,
     confusion_matrix,
     f1_score,
-    precision_recall_curve,
     roc_auc_score,
     roc_curve,
 )
 from sklearn.model_selection import train_test_split
 
 # ──────────────────────────────────────────────────────────
+# FIRST command → set_page_config
+# ──────────────────────────────────────────────────────────
+st.set_page_config(page_title="Fraud Dashboard", page_icon="🚦", layout="wide")
+
+# ──────────────────────────────────────────────────────────
 # Silence noisy warnings
 # ──────────────────────────────────────────────────────────
-warnings.filterwarnings("ignore", category=(FutureWarning, RuntimeWarning, UserWarning))
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 pd.options.mode.chained_assignment = None
 
@@ -54,19 +59,16 @@ MODELS_DIR = Path("models")
 BEST_MODEL_PATH = MODELS_DIR / "best_rf_model.pkl"
 PLOTLY_TMPL = "plotly_dark" if st.get_option("theme.base") == "dark" else "plotly"
 
-
 # ──────────────────────────────────────────────────────────
 # Helper utilities
 # ──────────────────────────────────────────────────────────
 def numeric_impute(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert to numeric, drop all‑NaN columns, median‑impute."""
     df_num = df.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
     imp = SimpleImputer(strategy="median")
     return pd.DataFrame(imp.fit_transform(df_num), columns=df_num.columns)
 
 
 def align_to_model(X: pd.DataFrame, model) -> pd.DataFrame:
-    """Ensure column order matches model.feature_names_in_ (adds 0‑filled missing)."""
     if hasattr(model, "feature_names_in_"):
         cols = list(model.feature_names_in_)
         return X.reindex(cols, axis=1, fill_value=0)
@@ -78,18 +80,14 @@ def cached_preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = preprocess_data(df_raw.copy(), target_column="fraud_reported")
     return feature_engineering(df)
 
-
 # ──────────────────────────────────────────────────────────
-# Beautiful CSS injection
+# CSS
 # ──────────────────────────────────────────────────────────
 st.markdown(
     """
 <style>
-/* center metrics */
 [data-testid="metric-container"] {text-align:center !important;}
-/* smoother plots */
 .plot-container > div {border-radius:12px !important;}
-/* subtle shadow for frames */
 section.main > div {box-shadow:0 0 8px rgba(0,0,0,0.07);}
 </style>
 """,
@@ -97,9 +95,8 @@ section.main > div {box-shadow:0 0 8px rgba(0,0,0,0.07);}
 )
 
 # ──────────────────────────────────────────────────────────
-# Page config
+# Title
 # ──────────────────────────────────────────────────────────
-st.set_page_config("Fraud Dashboard", "🚦", layout="wide")
 st.title("🚦 Insurance Claim Fraud Detection Dashboard")
 
 # ──────────────────────────────────────────────────────────
@@ -108,7 +105,7 @@ st.title("🚦 Insurance Claim Fraud Detection Dashboard")
 ss = st.session_state
 ss.setdefault("raw", None)
 ss.setdefault("prep", None)
-ss.setdefault("model", None)  # tuned model
+ss.setdefault("model", None)
 ss.setdefault("pred_df", None)
 
 # ──────────────────────────────────────────────────────────
@@ -131,24 +128,21 @@ with tab_upload:
         st.dataframe(ss.raw.head(), use_container_width=True)
 
 # ──────────────────────────────────────────────────────────
-# 2 · EDA (quick insights)
+# 2 · EDA
 # ──────────────────────────────────────────────────────────
 with tab_eda:
     st.header("🔬 Exploratory Data Analysis")
     if ss.raw is None:
         st.info("Upload a dataset first.")
     else:
-        col1, col2 = st.columns(2)
-        with col1:
+        c1, c2 = st.columns(2)
+        with c1:
             st.subheader("Class balance")
             fig = px.histogram(
-                ss.raw,
-                x="fraud_reported",
-                template=PLOTLY_TMPL,
-                color="fraud_reported",
+                ss.raw, x="fraud_reported", color="fraud_reported", template=PLOTLY_TMPL
             )
             st.plotly_chart(fig, use_container_width=True)
-        with col2:
+        with c2:
             st.subheader("Correlation heat‑map")
             corr = ss.raw.select_dtypes("number").corr()
             fig = px.imshow(
@@ -193,23 +187,21 @@ with tab_train:
                     X_bal, y_bal, test_size=0.2, random_state=42
                 )
 
-                # Capture training logs
                 buf = io.StringIO()
                 handler = logging.StreamHandler(buf)
                 logging.getLogger().addHandler(handler)
-                plt_show_orig = plt.show
+                plt_orig = plt.show
                 plt.show = lambda *a, **k: st.pyplot(plt.gcf(), clear_figure=True)
 
                 train_and_evaluate_models(X_tr, X_te, y_tr, y_te)
+                best_model = (
+                    hyperparameter_tuning_rf(X_tr, X_te, y_tr, y_te) if tune else None
+                )
 
-                best_model = None
-                if tune:
-                    best_model = hyperparameter_tuning_rf(X_tr, X_te, y_tr, y_te)
-                plt.show = plt_show_orig
+                plt.show = plt_orig
                 logging.getLogger().removeHandler(handler)
                 st.expander("Logs").text(buf.getvalue())
 
-                # Save tuned model if any
                 if best_model:
                     MODELS_DIR.mkdir(exist_ok=True)
                     joblib.dump(best_model, BEST_MODEL_PATH)
@@ -218,18 +210,16 @@ with tab_train:
                 elif BEST_MODEL_PATH.exists():
                     ss.model = joblib.load(BEST_MODEL_PATH)
 
-                # Quick metrics for chosen model
                 if ss.model:
                     X_te_aligned = align_to_model(X_te, ss.model)
                     preds = ss.model.predict(X_te_aligned)
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Accuracy", f"{accuracy_score(y_te, preds):.3f}")
-                    col2.metric("F1", f"{f1_score(y_te, preds):.3f}")
-                    col3.metric("ROC AUC", f"{roc_auc_score(y_te, preds):.3f}")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Accuracy", f"{accuracy_score(y_te, preds):.3f}")
+                    c2.metric("F1", f"{f1_score(y_te, preds):.3f}")
+                    c3.metric("ROC AUC", f"{roc_auc_score(y_te, preds):.3f}")
 
-                    # ROC curve
                     fpr, tpr, _ = roc_curve(y_te, preds)
-                    fig = go.Figure(
+                    roc_fig = go.Figure(
                         go.Scatter(x=fpr, y=tpr, mode="lines", name="ROC"),
                         layout=dict(
                             template=PLOTLY_TMPL,
@@ -238,24 +228,20 @@ with tab_train:
                             title="ROC Curve",
                         ),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(roc_fig, use_container_width=True)
 
-                    # Confusion matrix
                     cm = confusion_matrix(y_te, preds)
-                    fig_cm = px.imshow(
+                    cm_fig = px.imshow(
                         cm,
                         text_auto=True,
                         color_continuous_scale="Blues",
                         template=PLOTLY_TMPL,
                     )
-                    fig_cm.update_layout(title="Confusion Matrix")
-                    st.plotly_chart(fig_cm, use_container_width=True)
+                    cm_fig.update_layout(title="Confusion Matrix")
+                    st.plotly_chart(cm_fig, use_container_width=True)
 
-                    # Allow download
                     with open(BEST_MODEL_PATH, "rb") as f:
-                        st.download_button(
-                            "Download tuned model", f, "best_rf_model.pkl"
-                        )
+                        st.download_button("Download tuned model", f, "best_rf_model.pkl")
 
 # ──────────────────────────────────────────────────────────
 # 5 · Predict
@@ -300,7 +286,7 @@ with tab_explain:
                 model = joblib.load(BEST_MODEL_PATH)
                 X_exp = ss.prep.drop(columns=["fraud_reported"], errors="ignore")
                 X_exp = align_to_model(numeric_impute(X_exp), model)
-                plt_show_orig = plt.show
+                plt_orig = plt.show
                 plt.show = lambda *a, **k: st.pyplot(plt.gcf(), clear_figure=True)
                 explain_model_shap(model, X_exp)
-                plt.show = plt_show_orig
+                plt.show = plt_orig
