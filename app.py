@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────
-# Insurance‑Fraud Streamlit Dashboard · app.py  (v2.2)
+# Insurance‑Fraud Streamlit Dashboard · app.py  (v2.4)
 # ──────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 
 # ──────────────────────────────────────────────────────────
-# FIRST command → set_page_config
+# FIRST Streamlit command
 # ──────────────────────────────────────────────────────────
 st.set_page_config(page_title="Fraud Dashboard", page_icon="🚦", layout="wide")
 
@@ -42,7 +42,7 @@ warnings.filterwarnings("ignore", category=ConvergenceWarning)
 pd.options.mode.chained_assignment = None
 
 # ──────────────────────────────────────────────────────────
-# Project‑specific imports
+# Project imports
 # ──────────────────────────────────────────────────────────
 from evaluation import explain_model_shap
 from feature_engineering import feature_engineering
@@ -75,13 +75,23 @@ def align_to_model(X: pd.DataFrame, model) -> pd.DataFrame:
     return X
 
 
+def get_top_features_rf(model, top_n: int = 10) -> pd.Series:
+    """Return top_n features by importance from a RandomForest‑like model."""
+    importances = model.feature_importances_
+    return (
+        pd.Series(importances, index=model.feature_names_in_)
+        .sort_values(ascending=False)
+        .head(top_n)
+    )
+
+
 @st.cache_resource(show_spinner=False)
 def cached_preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = preprocess_data(df_raw.copy(), target_column="fraud_reported")
     return feature_engineering(df)
 
 # ──────────────────────────────────────────────────────────
-# CSS
+# CSS tweaks
 # ──────────────────────────────────────────────────────────
 st.markdown(
     """
@@ -100,21 +110,38 @@ section.main > div {box-shadow:0 0 8px rgba(0,0,0,0.07);}
 st.title("🚦 Insurance Claim Fraud Detection Dashboard")
 
 # ──────────────────────────────────────────────────────────
-# Session state
+# Session state shortcuts
 # ──────────────────────────────────────────────────────────
 ss = st.session_state
 ss.setdefault("raw", None)
 ss.setdefault("prep", None)
 ss.setdefault("model", None)
 ss.setdefault("pred_df", None)
+ss.setdefault("top_features", None)  # NEW
 
 # ──────────────────────────────────────────────────────────
 # Tabs
 # ──────────────────────────────────────────────────────────
 tabs = st.tabs(
-    ["📁 Upload", "🔬 EDA", "⚙️ Preprocess", "🧠 Train", "📊 Predict", "🔎 Explain"]
+    [
+        "📁 Upload",
+        "🔬 EDA",
+        "⚙️ Preprocess",
+        "🧠 Train",
+        "📊 Predict",
+        "📝 Single Prediction",
+        "🔎 Explain",
+    ]
 )
-tab_upload, tab_eda, tab_prep, tab_train, tab_pred, tab_explain = tabs
+(
+    tab_upload,
+    tab_eda,
+    tab_prep,
+    tab_train,
+    tab_pred,
+    tab_single,
+    tab_explain,
+) = tabs
 
 # ──────────────────────────────────────────────────────────
 # 1 · Upload
@@ -169,7 +196,7 @@ with tab_prep:
         st.dataframe(ss.prep.head(), use_container_width=True)
 
 # ──────────────────────────────────────────────────────────
-# 4 · Train
+# 4 · Train  (now saves top_features)
 # ──────────────────────────────────────────────────────────
 with tab_train:
     st.header("🧠 Model Training & Tuning")
@@ -210,7 +237,13 @@ with tab_train:
                 elif BEST_MODEL_PATH.exists():
                     ss.model = joblib.load(BEST_MODEL_PATH)
 
+                # ---- NEW: compute & store top predictors --------------------
                 if ss.model:
+                    ss.top_features = get_top_features_rf(ss.model, top_n=10).index.tolist()
+                    st.write("🔑 **Top predictors** (saved for single‑prediction):")
+                    st.write(ss.top_features)
+
+                    # Quick metrics
                     X_te_aligned = align_to_model(X_te, ss.model)
                     preds = ss.model.predict(X_te_aligned)
                     c1, c2, c3 = st.columns(3)
@@ -244,7 +277,7 @@ with tab_train:
                         st.download_button("Download tuned model", f, "best_rf_model.pkl")
 
 # ──────────────────────────────────────────────────────────
-# 5 · Predict
+# 5 · Batch Predict
 # ──────────────────────────────────────────────────────────
 with tab_pred:
     st.header("📊 Batch Prediction")
@@ -272,7 +305,78 @@ with tab_pred:
             )
 
 # ──────────────────────────────────────────────────────────
-# 6 · Explain
+# 6 · 📝 Single Prediction (now uses top_features)
+# ──────────────────────────────────────────────────────────
+with tab_single:
+    st.header("📝 Single Prediction (Probability)")
+    if not BEST_MODEL_PATH.exists():
+        st.error("No trained model found. Train or load a model first.")
+    elif ss.raw is None:
+        st.info("Upload a dataset first (needed for categorical choices).")
+    else:
+        raw_df = ss.raw
+        model = joblib.load(BEST_MODEL_PATH)
+        top_cols = ss.top_features or list(model.feature_names_in_)
+
+        with st.form("single_pred_form"):
+            st.write("Enter feature values (top predictors):")
+            inputs: dict[str, object] = {}
+
+            for col in top_cols:
+                if col not in raw_df.columns:
+                    inputs[col] = st.number_input(col, value=0.0, key=f"single_{col}")
+                    continue
+
+                if raw_df[col].dtype == object:
+                    opts = sorted(raw_df[col].dropna().unique().tolist())
+                    if 2 < len(opts) <= 25:
+                        inputs[col] = st.selectbox(col, options=opts, key=f"single_{col}")
+                    else:
+                        inputs[col] = st.text_input(col, key=f"single_{col}")
+                else:
+                    default_val = float(raw_df[col].median())
+                    inputs[col] = st.number_input(col, value=default_val, key=f"single_{col}")
+
+            submitted = st.form_submit_button("Predict")
+
+        if submitted:
+            new_raw = pd.DataFrame([inputs])
+            tmp_raw = pd.concat([raw_df.head(1).copy(), new_raw], ignore_index=True)
+            tmp_proc = cached_preprocess(tmp_raw)
+            single_proc = tmp_proc.tail(1).drop(columns=["fraud_reported"], errors="ignore")
+            single_proc = align_to_model(numeric_impute(single_proc), model)
+            proba = (
+                model.predict_proba(single_proc)[0][1]
+                if hasattr(model, "predict_proba")
+                else model.predict(single_proc)[0]
+            )
+            percent = float(proba) * 100
+
+            st.subheader("Fraud Probability")
+            gauge = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=percent,
+                    number={"suffix": "%"},
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": "#ff4b4b"},
+                        "steps": [
+                            {"range": [0, 50], "color": "#2ecc71"},
+                            {"range": [50, 100], "color": "#ff4b4b"},
+                        ],
+                    },
+                )
+            )
+            gauge.update_layout(template=PLOTLY_TMPL, height=300)
+            st.plotly_chart(gauge, use_container_width=False)
+            st.success(
+                f"Estimated fraud probability: **{percent:.2f}%** "
+                f"({'Fraud' if percent>=50 else 'Not Fraud'})"
+            )
+
+# ──────────────────────────────────────────────────────────
+# 7 · Explain
 # ──────────────────────────────────────────────────────────
 with tab_explain:
     st.header("🔎 SHAP Explainability")
