@@ -6,7 +6,7 @@ import io
 import matplotlib.pyplot as plt
 import logging
 
-# Import your custom modules
+# Import custom modules from your project
 from data_handling import load_dataset, validate_required_columns
 from preprocessing import preprocess_data, eda_plots
 from feature_engineering import feature_engineering
@@ -15,6 +15,7 @@ from evaluation import explain_model_shap
 
 from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
 
 # ----------------------------
 # Streamlit Dashboard Settings
@@ -55,7 +56,7 @@ with st.expander("View / Run Preprocessing"):
         if st.button("Preprocess Data"):
             try:
                 data = st.session_state.data.copy()
-                # Preprocess data using your module (handles cleaning, encoding, scaling, etc.)
+                # Preprocess data using your custom preprocessing function
                 processed = preprocess_data(data, target_column="fraud_reported")
                 # Apply feature engineering (e.g., is_rush_hour)
                 processed = feature_engineering(processed)
@@ -79,14 +80,23 @@ with st.expander("Run Model Training"):
         else:
             if st.button("Run Model Training"):
                 try:
-                    # Split features and target
+                    # Use the preprocessed data
                     data = st.session_state.preprocessed_data.copy()
+
+                    # Drop rows where target is missing (if any)
+                    data = data.dropna(subset=["fraud_reported"])
+
+                    # Separate features and target
                     X = data.drop("fraud_reported", axis=1)
                     y = data["fraud_reported"]
 
+                    # Robust imputation of missing values using median strategy
+                    imputer = SimpleImputer(strategy="median")
+                    X_imputed = pd.DataFrame(imputer.fit_transform(X), columns=X.columns)
+
                     # Handle imbalance with SMOTE
                     sm = SMOTE(random_state=42)
-                    X_res, y_res = sm.fit_resample(X, y)
+                    X_res, y_res = sm.fit_resample(X_imputed, y)
 
                     # Train-Test split
                     X_train, X_test, y_train, y_test = train_test_split(
@@ -100,7 +110,7 @@ with st.expander("Run Model Training"):
                     logger = logging.getLogger()
                     logger.addHandler(log_handler)
 
-                    # Train and evaluate models (RandomForest by default is among the options)
+                    # Train and evaluate models (using your defined function)
                     train_and_evaluate_models(X_train, X_test, y_train, y_test)
 
                     # Remove custom log handler and display captured logs
@@ -119,18 +129,22 @@ with st.expander("Run Prediction on Uploaded Data"):
     if st.session_state.preprocessed_data is not None:
         if st.button("Run Prediction"):
             try:
-                # Load the pre-trained model (ensure that the model file exists at models/best_rf_model.pkl)
+                # Load the pre-trained model (ensure the file exists at models/best_rf_model.pkl)
                 model = joblib.load("models/best_rf_model.pkl")
                 data = st.session_state.preprocessed_data.copy()
 
-                # Drop target column if present
+                # Drop target column if present for prediction
                 if "fraud_reported" in data.columns:
                     X_pred = data.drop("fraud_reported", axis=1)
                 else:
                     X_pred = data
 
+                # Optional: Impute missing values for the prediction data as well
+                imputer = SimpleImputer(strategy="median")
+                X_pred = pd.DataFrame(imputer.fit_transform(X_pred), columns=X_pred.columns)
+
                 predictions = model.predict(X_pred)
-                # Add predictions to a copy of the data for display
+                # Add predictions to data for display
                 pred_df = data.copy()
                 pred_df["Prediction"] = predictions
                 st.success("Prediction complete!")
@@ -157,6 +171,10 @@ with st.expander("Generate SHAP Plots"):
                     X_explain = data.drop("fraud_reported", axis=1)
                 else:
                     X_explain = data
+
+                # Impute missing values before SHAP explanation as well
+                imputer = SimpleImputer(strategy="median")
+                X_explain = pd.DataFrame(imputer.fit_transform(X_explain), columns=X_explain.columns)
 
                 # Override plt.show to display plots in Streamlit
                 old_show = plt.show
