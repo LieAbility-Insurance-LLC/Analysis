@@ -149,9 +149,14 @@ tabs = st.tabs(
 with tab_upload:
     st.header("📁 Upload dataset")
     file = st.file_uploader("CSV only", type="csv")
-    if file:
+
+    # Load only the first time the file appears
+    if file and "raw_loaded" not in ss:
         ss.raw = pd.read_csv(file)
-        st.toast("File loaded!", icon="✅")
+        ss.raw_loaded = True                       # flag prevents repeat toast
+        st.toast("Dataset successfully uploaded!", icon="📥")
+
+    if ss.get("raw") is not None:
         st.dataframe(ss.raw.head(), use_container_width=True)
 
 # ──────────────────────────────────────────────────────────
@@ -305,10 +310,11 @@ with tab_pred:
             )
 
 # ──────────────────────────────────────────────────────────
-# 6 · 📝 Single Prediction (now uses top_features)
+# 6 · 📝 Single Prediction  (REPLACE THIS BLOCK)
 # ──────────────────────────────────────────────────────────
 with tab_single:
     st.header("📝 Single Prediction (Probability)")
+
     if not BEST_MODEL_PATH.exists():
         st.error("No trained model found. Train or load a model first.")
     elif ss.raw is None:
@@ -323,22 +329,62 @@ with tab_single:
             inputs: dict[str, object] = {}
 
             for col in top_cols:
-                if col not in raw_df.columns:
-                    inputs[col] = st.number_input(col, value=0.0, key=f"single_{col}")
+                # ------------- DATE FIELD -----------------------------------
+                if "date" in col.lower():
+                    default_date = pd.to_datetime(
+                        raw_df[col].dropna().iloc[0]
+                        if col in raw_df.columns
+                        else "2020-01-01"
+                    )
+                    chosen = st.date_input(
+                        col,
+                        value=default_date,
+                        key=f"single_{col}",
+                    )
+                    # store as original string format
+                    inputs[col] = chosen.strftime("%m/%d/%Y")
                     continue
 
-                if raw_df[col].dtype == object:
-                    opts = sorted(raw_df[col].dropna().unique().tolist())
+                # ------------- NON‑DATE ------------------------------------
+                if col not in raw_df.columns:
+                    inputs[col] = st.number_input(
+                        col, value=0.0, key=f"single_{col}"
+                    )
+                    continue
+
+                series = raw_df[col]
+                if series.dtype == object:
+                    opts = sorted(series.dropna().unique().tolist())
                     if 2 < len(opts) <= 25:
-                        inputs[col] = st.selectbox(col, options=opts, key=f"single_{col}")
+                        inputs[col] = st.selectbox(
+                            col, options=opts, key=f"single_{col}"
+                        )
                     else:
                         inputs[col] = st.text_input(col, key=f"single_{col}")
                 else:
-                    default_val = float(raw_df[col].median())
-                    inputs[col] = st.number_input(col, value=default_val, key=f"single_{col}")
+                    # decide if integer‑like
+                    is_int_like = pd.api.types.is_integer_dtype(series) or (
+                        series.dropna() % 1 == 0
+                    ).all()
+                    default_val = float(series.median())
+                    if is_int_like:
+                        inputs[col] = st.number_input(
+                            col,
+                            value=int(default_val),
+                            step=1,
+                            format="%d",
+                            key=f"single_{col}",
+                        )
+                    else:
+                        inputs[col] = st.number_input(
+                            col,
+                            value=default_val,
+                            key=f"single_{col}",
+                        )
 
             submitted = st.form_submit_button("Predict")
 
+        # ---------- prediction & display ----------------------------------
         if submitted:
             new_raw = pd.DataFrame([inputs])
             tmp_raw = pd.concat([raw_df.head(1).copy(), new_raw], ignore_index=True)
@@ -368,6 +414,7 @@ with tab_single:
                     },
                 )
             )
+            st.toast("Single prediction complete!", icon="🎉")
             gauge.update_layout(template=PLOTLY_TMPL, height=300)
             st.plotly_chart(gauge, use_container_width=False)
             st.success(
