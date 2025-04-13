@@ -1,5 +1,7 @@
 import logging
 import warnings
+import joblib
+import os
 warnings.filterwarnings("ignore")
 
 # Configure logging once here
@@ -81,6 +83,12 @@ def main():
     # === Step 10: Model Interpretation (SHAP) ===
     if best_rf is not None:
         explain_model_shap(best_rf, X_test)
+
+    # === Step 11: Export Model ===
+    if best_rf is not None:
+        os.makedirs("models", exist_ok=True)
+        joblib.dump(best_rf, "models/best_rf_model.pkl")
+        logging.info("Exported best RandomForest model to 'models/best_rf_model.pkl'")
 
 if __name__ == "__main__":
     main()
