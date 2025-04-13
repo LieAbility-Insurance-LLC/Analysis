@@ -1,191 +1,237 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
+# ──────────────────────────────────────────────────────────
+# Insurance‑Fraud Streamlit Dashboard · app.py
+# ──────────────────────────────────────────────────────────
 import io
-import matplotlib.pyplot as plt
 import logging
+import warnings
+from pathlib import Path
 
-# Import custom modules from your project
-from data_handling import load_dataset, validate_required_columns
-from preprocessing import preprocess_data, eda_plots
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import streamlit as st
+from imblearn.over_sampling import SMOTE
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import train_test_split
+
+# ──────────────────────────────────────────────────────────
+# Silence noisy warnings
+# ──────────────────────────────────────────────────────────
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+pd.options.mode.chained_assignment = None
+
+# ──────────────────────────────────────────────────────────
+# Project‑specific imports
+# ──────────────────────────────────────────────────────────
 from feature_engineering import feature_engineering
 from model_training import train_and_evaluate_models
+from preprocessing import preprocess_data
 from evaluation import explain_model_shap
 
-from imblearn.over_sampling import SMOTE
-from sklearn.model_selection import train_test_split
-from sklearn.impute import SimpleImputer
+# ──────────────────────────────────────────────────────────
+# Utility helpers
+# ──────────────────────────────────────────────────────────
+MODELS_DIR = Path("models")
+BEST_MODEL_PATH = MODELS_DIR / "best_rf_model.pkl"
 
-# ----------------------------
-# Streamlit Dashboard Settings
-# ----------------------------
-st.set_page_config(page_title="Insurance Claim Fraud Dashboard", layout="wide")
-st.title("Insurance Claim Fraud Detection Dashboard")
 
-# Initialize session state to store data and preprocessed data
-if "data" not in st.session_state:
-    st.session_state.data = None
-if "preprocessed_data" not in st.session_state:
-    st.session_state.preprocessed_data = None
+def numeric_impute(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce all columns to numeric, drop all‑NaN cols, median‑impute the rest."""
+    df_num = df.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
+    imputer = SimpleImputer(strategy="median")
+    df_imp = pd.DataFrame(imputer.fit_transform(df_num), columns=df_num.columns)
+    return df_imp
 
-# ----------------------------
-# Sidebar: File Upload
-# ----------------------------
-st.sidebar.header("1. Upload CSV File")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV file", type=["csv"])
-if uploaded_file is not None:
-    try:
-        data = pd.read_csv(uploaded_file)
-        st.session_state.data = data
-        st.sidebar.success("File uploaded successfully!")
-        st.write("### Uploaded Data Preview")
-        st.write(f"Data Shape: {data.shape}")
-        st.dataframe(data.head())
-    except Exception as e:
-        st.sidebar.error(f"Error loading CSV file: {e}")
-else:
-    st.sidebar.info("Please upload your dataset here.")
 
-# ----------------------------
-# Section: Preprocessing
-# ----------------------------
-st.header("2. Data Preprocessing")
-with st.expander("View / Run Preprocessing"):
-    if st.session_state.data is not None:
-        if st.button("Preprocess Data"):
-            try:
-                data = st.session_state.data.copy()
-                # Preprocess data using your custom preprocessing function
-                processed = preprocess_data(data, target_column="fraud_reported")
-                # Apply feature engineering (e.g., is_rush_hour)
-                processed = feature_engineering(processed)
-                st.session_state.preprocessed_data = processed
-                st.success("Data preprocessing completed!")
-                st.write("#### Processed Data Preview")
-                st.dataframe(processed.head())
-            except Exception as e:
-                st.error(f"Preprocessing error: {e}")
+@st.cache_data(show_spinner=False)
+def cached_preprocess(raw: pd.DataFrame) -> pd.DataFrame:
+    """Preprocess + feature engineer (cached)."""
+    df = preprocess_data(raw.copy(), target_column="fraud_reported")
+    df = feature_engineering(df)
+    return df
+
+
+def pretty_confusion(cm: np.ndarray):
+    import seaborn as sns
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        cbar=False,
+        ax=ax,
+        linewidths=0.5,
+    )
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    st.pyplot(fig, clear_figure=True)
+
+
+# ──────────────────────────────────────────────────────────
+# Streamlit page config
+# ──────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Insurance Fraud Dashboard",
+    page_icon="🚦",
+    layout="wide",
+)
+st.title("🚦 Insurance Claim Fraud Detection Dashboard")
+
+# ──────────────────────────────────────────────────────────
+# Sidebar: navigation
+# ──────────────────────────────────────────────────────────
+section = st.sidebar.radio(
+    "Navigate",
+    ["Upload & Preview", "Preprocess", "Train", "Predict", "Explain (SHAP)"],
+)
+
+# Session state
+if "raw" not in st.session_state:
+    st.session_state.raw = None
+if "prep" not in st.session_state:
+    st.session_state.prep = None
+if "pred_df" not in st.session_state:
+    st.session_state.pred_df = None
+
+# ──────────────────────────────────────────────────────────
+# 1 · Upload & Preview
+# ──────────────────────────────────────────────────────────
+if section == "Upload & Preview":
+    st.header("1 · Upload CSV")
+    file = st.file_uploader("Drop or select a CSV file", type=["csv"])
+    if file:
+        st.session_state.raw = pd.read_csv(file)
+        st.success(f"Loaded file – shape {st.session_state.raw.shape}")
+        st.dataframe(st.session_state.raw.head())
+
+# ──────────────────────────────────────────────────────────
+# 2 · Preprocess
+# ──────────────────────────────────────────────────────────
+elif section == "Preprocess":
+    st.header("2 · Preprocessing")
+    if st.session_state.raw is None:
+        st.info("Please upload a dataset first.")
     else:
-        st.info("Upload a CSV file to start preprocessing.")
+        if st.button("Run preprocessing"):
+            with st.spinner("Processing…"):
+                st.session_state.prep = cached_preprocess(st.session_state.raw)
+            st.success("Done!")
+        if st.session_state.prep is not None:
+            st.write(f"Processed shape: {st.session_state.prep.shape}")
+            st.dataframe(st.session_state.prep.head())
 
-# ----------------------------
-# Section: Model Training
-# ----------------------------
-st.header("3. Model Training")
-with st.expander("Run Model Training"):
-    if st.session_state.preprocessed_data is not None:
-        if "fraud_reported" not in st.session_state.preprocessed_data.columns:
-            st.error("The target column 'fraud_reported' is missing in the processed data.")
-        else:
-            if st.button("Run Model Training"):
-                try:
-                    # Use the preprocessed data
-                    data = st.session_state.preprocessed_data.copy()
-
-                    # Drop rows where target is missing (if any)
-                    data = data.dropna(subset=["fraud_reported"])
-
-                    # Separate features and target
-                    X = data.drop("fraud_reported", axis=1)
-                    y = data["fraud_reported"]
-
-                    # Robust imputation of missing values using median strategy
-                    imputer = SimpleImputer(strategy="median")
-                    X_imputed = pd.DataFrame(imputer.fit_transform(X), columns=X.columns)
-
-                    # Handle imbalance with SMOTE
-                    sm = SMOTE(random_state=42)
-                    X_res, y_res = sm.fit_resample(X_imputed, y)
-
-                    # Train-Test split
-                    X_train, X_test, y_train, y_test = train_test_split(
-                        X_res, y_res, test_size=0.2, random_state=42
-                    )
-
-                    # Set up log capture to display training logs in the dashboard
-                    log_stream = io.StringIO()
-                    log_handler = logging.StreamHandler(log_stream)
-                    log_handler.setLevel(logging.INFO)
-                    logger = logging.getLogger()
-                    logger.addHandler(log_handler)
-
-                    # Train and evaluate models (using your defined function)
-                    train_and_evaluate_models(X_train, X_test, y_train, y_test)
-
-                    # Remove custom log handler and display captured logs
-                    logger.removeHandler(log_handler)
-                    st.text_area("Training Logs", log_stream.getvalue(), height=300)
-                except Exception as e:
-                    st.error(f"Error during training: {e}")
+# ──────────────────────────────────────────────────────────
+# 3 · Model Training
+# ──────────────────────────────────────────────────────────
+elif section == "Train":
+    st.header("3 · Model Training")
+    if st.session_state.prep is None:
+        st.info("Run preprocessing first.")
     else:
-        st.info("Preprocess the data first to enable training.")
+        if st.button("Train models"):
+            with st.spinner("Training… this may take a minute"):
+                df = st.session_state.prep.copy().dropna(subset=["fraud_reported"])
+                X = df.drop("fraud_reported", axis=1)
+                y = df["fraud_reported"]
 
-# ----------------------------
-# Section: Prediction
-# ----------------------------
-st.header("4. Prediction")
-with st.expander("Run Prediction on Uploaded Data"):
-    if st.session_state.preprocessed_data is not None:
-        if st.button("Run Prediction"):
-            try:
-                # Load the pre-trained model (ensure the file exists at models/best_rf_model.pkl)
-                model = joblib.load("models/best_rf_model.pkl")
-                data = st.session_state.preprocessed_data.copy()
+                X_imp = numeric_impute(X)
+                X_bal, y_bal = SMOTE(random_state=42).fit_resample(X_imp, y)
+                X_tr, X_te, y_tr, y_te = train_test_split(
+                    X_bal, y_bal, test_size=0.2, random_state=42
+                )
 
-                # Drop target column if present for prediction
-                if "fraud_reported" in data.columns:
-                    X_pred = data.drop("fraud_reported", axis=1)
-                else:
-                    X_pred = data
+                # Capture logs
+                buf = io.StringIO()
+                handler = logging.StreamHandler(buf)
+                logging.getLogger().addHandler(handler)
 
-                # Optional: Impute missing values for the prediction data as well
-                imputer = SimpleImputer(strategy="median")
-                X_pred = pd.DataFrame(imputer.fit_transform(X_pred), columns=X_pred.columns)
-
-                predictions = model.predict(X_pred)
-                # Add predictions to data for display
-                pred_df = data.copy()
-                pred_df["Prediction"] = predictions
-                st.success("Prediction complete!")
-                st.write("#### Predictions Preview")
-                st.dataframe(pred_df.head())
-            except Exception as e:
-                st.error(f"Prediction error: {e}")
-    else:
-        st.info("Preprocess the data first to enable prediction.")
-
-# ----------------------------
-# Section: SHAP Explanation
-# ----------------------------
-st.header("5. SHAP Explanation")
-with st.expander("Generate SHAP Plots"):
-    if st.session_state.preprocessed_data is not None:
-        if st.button("Generate SHAP Explanation"):
-            try:
-                # Load the pre-trained model
-                model = joblib.load("models/best_rf_model.pkl")
-                data = st.session_state.preprocessed_data.copy()
-                # Use all available features (drop target if present)
-                if "fraud_reported" in data.columns:
-                    X_explain = data.drop("fraud_reported", axis=1)
-                else:
-                    X_explain = data
-
-                # Impute missing values before SHAP explanation as well
-                imputer = SimpleImputer(strategy="median")
-                X_explain = pd.DataFrame(imputer.fit_transform(X_explain), columns=X_explain.columns)
-
-                # Override plt.show to display plots in Streamlit
                 old_show = plt.show
-                plt.show = lambda: st.pyplot(plt.gcf())
+                plt.show = lambda *a, **kw: st.pyplot(plt.gcf(), clear_figure=True)
 
-                # Generate SHAP explanation plots (summary bar plot and force plot)
-                explain_model_shap(model, X_explain)
+                train_and_evaluate_models(X_tr, X_te, y_tr, y_te)
 
-                # Restore original plt.show
                 plt.show = old_show
-            except Exception as e:
-                st.error(f"SHAP explanation error: {e}")
+                logging.getLogger().removeHandler(handler)
+
+                st.expander("Logs").text(buf.getvalue())
+
+                # Quick metrics for default RF
+                rf_pred = joblib.load(BEST_MODEL_PATH).predict(X_te)
+                acc = accuracy_score(y_te, rf_pred)
+                f1 = f1_score(y_te, rf_pred)
+                auc = roc_auc_score(y_te, rf_pred)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Accuracy", f"{acc:.3f}")
+                col2.metric("F1 Score", f"{f1:.3f}")
+                col3.metric("ROC AUC", f"{auc:.3f}")
+                pretty_confusion(confusion_matrix(y_te, rf_pred))
+
+# ──────────────────────────────────────────────────────────
+# 4 · Prediction
+# ──────────────────────────────────────────────────────────
+elif section == "Predict":
+    st.header("4 · Prediction")
+    if st.session_state.prep is None:
+        st.info("Need preprocessed data.")
     else:
-        st.info("Preprocess the data first to generate SHAP explanations.")
+        if not BEST_MODEL_PATH.exists():
+            st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
+        else:
+            if st.button("Run prediction"):
+                with st.spinner("Predicting…"):
+                    model = joblib.load(BEST_MODEL_PATH)
+                    X_pred = st.session_state.prep.copy()
+                    if "fraud_reported" in X_pred.columns:
+                        X_pred = X_pred.drop("fraud_reported", axis=1)
+                    X_pred = numeric_impute(X_pred)
+                    preds = model.predict(X_pred)
+                    out = st.session_state.prep.copy()
+                    out["Prediction"] = preds
+                    st.session_state.pred_df = out
+                st.success("Prediction complete!")
+
+        if st.session_state.pred_df is not None:
+            st.dataframe(st.session_state.pred_df.head())
+            csv = st.session_state.pred_df.to_csv(index=False).encode()
+            st.download_button(
+                "Download predictions CSV",
+                csv,
+                "predictions.csv",
+                "text/csv",
+            )
+
+# ──────────────────────────────────────────────────────────
+# 5 · SHAP Explanation
+# ──────────────────────────────────────────────────────────
+elif section == "Explain (SHAP)":
+    st.header("5 · Model Explainability")
+    if st.session_state.prep is None:
+        st.info("Need preprocessed data.")
+    elif not BEST_MODEL_PATH.exists():
+        st.error(f"Pre‑trained model not found at {BEST_MODEL_PATH}")
+    else:
+        if st.button("Generate SHAP plots"):
+            with st.spinner("Calculating SHAP values…"):
+                model = joblib.load(BEST_MODEL_PATH)
+                X_exp = st.session_state.prep.copy()
+                if "fraud_reported" in X_exp.columns:
+                    X_exp = X_exp.drop("fraud_reported", axis=1)
+                X_exp = numeric_impute(X_exp)
+
+                old_show = plt.show
+                plt.show = lambda *a, **kw: st.pyplot(plt.gcf(), clear_figure=True)
+                explain_model_shap(model, X_exp)
+                plt.show = old_show
