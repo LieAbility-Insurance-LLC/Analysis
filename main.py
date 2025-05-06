@@ -1,94 +1,114 @@
+# main.py  ·  v2.1
 import logging
 import warnings
-import joblib
 import os
+import joblib
+
 warnings.filterwarnings("ignore")
 
-# Configure logging once here
+# ──────────────────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+# ──────────────────────────────────────────────────────────
+# Third‑party
+# ──────────────────────────────────────────────────────────
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import IsolationForest
 from imblearn.over_sampling import SMOTE
 
-# Local module imports
+# ──────────────────────────────────────────────────────────
+# Local modules
+# ──────────────────────────────────────────────────────────
 from data_handling import load_dataset, validate_required_columns
 from preprocessing import preprocess_data, eda_plots
-from feature_engineering import feature_engineering, select_top_features
-from model_training import train_and_evaluate_models, hyperparameter_tuning_rf, evaluate_unsupervised_model
+from feature_engineering import (
+    feature_engineering,
+    select_top_features,
+)
+from model_training import (
+    train_and_evaluate_models,
+    hyperparameter_tuning_rf,
+    evaluate_unsupervised_model,
+)
 from evaluation import explain_model_shap
-from sklearn.ensemble import IsolationForest  # Needed to instantiate the unsupervised model
 
-def main():
-    # === Step 1: Load Data ===
-    file_path = "insurance_claims.csv"
-    df = load_dataset(file_path)
+# ──────────────────────────────────────────────────────────
+# Main driver
+# ──────────────────────────────────────────────────────────
+def main() -> None:
+    # === 1 · Load ============================================================
+    df = load_dataset("insurance_claims.csv")
     if df.empty:
-        logging.error("Exiting due to empty dataset.")
+        logging.error("Exiting – empty dataset.")
         return
 
-    # === Step 2: Validate Required Columns ===
-    required_columns = ["months_as_customer", "age", "policy_number", "fraud_reported"]
-    if not validate_required_columns(df, required_columns):
-        logging.error("Exiting due to missing required columns.")
+    # === 2 · Sanity check ====================================================
+    must_have = ["months_as_customer", "age", "policy_number", "fraud_reported"]
+    if not validate_required_columns(df, must_have):
+        logging.error("Exiting – required columns missing.")
         return
 
-    # === Step 3: Preprocess Data ===
+    # === 3 · Pre‑process =====================================================
     df = preprocess_data(df, target_column="fraud_reported")
 
-    # === Step 4: EDA ===
-    eda_plots(df, target_column="fraud_reported")
-
-    # === Step 5: Feature Engineering ===
+    # === 4 · Feature engineering ============================================
     df = feature_engineering(df)
 
-    # === Step 6: Feature Selection (Optional) ===
+    # === 5 · Top‑N feature selection ========================================
     top_features = select_top_features(df, target="fraud_reported", top_n=20)
+
+    # === 6 · EDA (restricted heat‑map) ======================================
+    corr_cols = top_features[:9] if top_features else None
+    eda_plots(df, target_column="fraud_reported", corr_cols=corr_cols)
+
+    # keep only top predictors for modelling
     if top_features:
         df = df[top_features + ["fraud_reported"]]
 
-    # === Step 7: Train-Test Split & Handle Imbalance ===
-    X = df.drop("fraud_reported", axis=1)
-    y = df["fraud_reported"]
+    # === 7 · Train / test split + SMOTE =====================================
+    X, y = df.drop("fraud_reported", axis=1), df["fraud_reported"]
 
-    sm = SMOTE(random_state=42)
     try:
-        X_res, y_res = sm.fit_resample(X, y)
+        X, y = SMOTE(random_state=42).fit_resample(X, y)
     except Exception as e:
-        logging.error(f"SMOTE error: {e}. Proceeding without SMOTE.")
-        X_res, y_res = X, y
+        logging.error(f"SMOTE failed: {e} – continuing without resampling.")
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_res, y_res, test_size=0.2, random_state=42
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=0.2, random_state=42
     )
 
-    # === Step 8: Train & Evaluate Models ===
-    train_and_evaluate_models(X_train, X_test, y_train, y_test)
+    # === 8 · Model training & baseline eval =================================
+    train_and_evaluate_models(X_tr, X_te, y_tr, y_te)
 
-    # === Step 9: Hyperparameter Tuning (Optional) ===
-    best_rf = hyperparameter_tuning_rf(X_train, X_test, y_train, y_test)
+    # === 9 · RF tuning =======================================================
+    best_rf = hyperparameter_tuning_rf(X_tr, X_te, y_tr, y_te)
 
-    # === Additional: Evaluate Unsupervised Model using continuous anomaly scores ===
+    # === 10 · Isolation Forest (unsupervised) ===============================
     try:
-        iso_forest = IsolationForest(contamination=0.01, random_state=42)
-        iso_forest.fit(X_train)
-        evaluate_unsupervised_model(iso_forest, X_test, y_test, model_name="Isolation Forest (Standalone Evaluation)")
+        iso = IsolationForest(contamination=0.01, random_state=42).fit(X_tr)
+        evaluate_unsupervised_model(
+            iso, X_te, y_te, model_name="Isolation Forest (stand‑alone)"
+        )
     except Exception as e:
-        logging.error(f"Error evaluating unsupervised model: {e}")
+        logging.error(f"Isolation Forest error: {e}")
 
-    # === Step 10: Model Interpretation (SHAP) ===
+    # === 11 · SHAP explainability ===========================================
     if best_rf is not None:
-        explain_model_shap(best_rf, X_test)
+        explain_model_shap(best_rf, X_te)
 
-    # === Step 11: Export Model ===
+    # === 12 · Persist tuned model ===========================================
     if best_rf is not None:
         os.makedirs("models", exist_ok=True)
         joblib.dump(best_rf, "models/best_rf_model.pkl")
-        logging.info("Exported best RandomForest model to 'models/best_rf_model.pkl'")
+        logging.info("Saved tuned RandomForest → models/best_rf_model.pkl")
+
 
 if __name__ == "__main__":
     main()

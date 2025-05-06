@@ -71,24 +71,49 @@ def preprocess_data(df: pd.DataFrame,
     return df
 
 
-def eda_plots(df: pd.DataFrame, target_column: str = "fraud_reported"):
-    """
-    Basic Exploratory Data Analysis:
-    - Class distribution
-    - Correlation heatmap
-    """
+def eda_plots(
+    df: pd.DataFrame,
+    target_column: str = "fraud_reported",
+    corr_cols: list[str] | None = None,
+):
     if df.empty:
-        logging.warning("EDA skipped. DataFrame is empty.")
+        logging.warning("EDA skipped – DataFrame is empty.")
         return
 
-    # Class distribution
+    # ------------------------------------------------------------------
+    # 1) Class distribution
+    # ------------------------------------------------------------------
     plt.figure(figsize=(6, 4))
     sns.countplot(x=target_column, data=df)
-    plt.title('Class Distribution')
+    plt.title("Class Distribution")
+    plt.tight_layout()
     plt.show()
 
-    # Correlation matrix
-    plt.figure(figsize=(12, 8))
-    sns.heatmap(df.corr(), cmap='coolwarm', annot=False)
-    plt.title('Correlation Heatmap')
+    # ------------------------------------------------------------------
+    # 2) Correlation heat‑map (restricted)
+    # ------------------------------------------------------------------
+    # decide which columns to use
+    if corr_cols is None:
+        corr_cols = df.select_dtypes("number").columns.tolist()
+
+    # drop anything missing from df (e.g. after one‑hot / encoding)
+    corr_cols = [c for c in corr_cols if c in df.columns]
+
+    if len(corr_cols) < 2:
+        logging.warning("Not enough numeric columns for a correlation heat‑map.")
+        return
+
+    corr = df[corr_cols].corr()
+
+    plt.figure(figsize=(0.6 * len(corr_cols) + 4, 0.45 * len(corr_cols) + 2))
+    sns.heatmap(
+        corr,
+        cmap="coolwarm",
+        annot=True,
+        fmt=".2f",
+        square=True,
+        cbar_kws={"shrink": 0.75},
+    )
+    plt.title(f"Correlation Heat‑map ({len(corr_cols)} best predictors)")
+    plt.tight_layout()
     plt.show()
