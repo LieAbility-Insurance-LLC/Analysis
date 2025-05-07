@@ -61,23 +61,52 @@ def evaluate_unsupervised_model(model, X_test, y_test, model_name="Unsupervised 
 
 
 def train_and_evaluate_models(X_train, X_test, y_train, y_test):
-    """
-    Train and evaluate a few supervised and unsupervised models.
-    """
+    # ──────────────────────────────────────────────────────────
+    # Local imports – avoids circular dependencies
+    # ──────────────────────────────────────────────────────────
+    from evaluation import (
+        evaluate_model,
+        plot_pr_curve,
+        plot_calibration_curve,
+        plot_cumulative_gain,
+    )
+    import logging
+    import numpy as np
+
     # -------------------
     # SUPERVISED MODELS
     # -------------------
     models = {
         "Logistic Regression": LogisticRegression(random_state=42),
         "Random Forest": RandomForestClassifier(random_state=42),
-        "XGBoost": XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss')
+        "XGBoost": XGBClassifier(
+            random_state=42,
+            use_label_encoder=False,
+            eval_metric="logloss",
+        ),
     }
 
     for name, model in models.items():
         try:
+            # ── fit & hard predictions ───────────────────────────
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
             evaluate_model(y_test, y_pred, model_name=name)
+
+            # ── probability / score vector (for curves) ─────────
+            if hasattr(model, "predict_proba"):
+                y_score = model.predict_proba(X_test)[:, 1]
+            elif hasattr(model, "decision_function"):
+                y_score = model.decision_function(X_test)
+            else:
+                # fall back to hard predictions (step‑function curves)
+                y_score = y_pred.astype(float)
+
+            # ── advanced diagnostic plots ───────────────────────
+            plot_pr_curve(y_test, y_score, model_name=name)
+            plot_calibration_curve(model, X_test, y_test, model_name=name)
+            plot_cumulative_gain(y_test, y_score, model_name=name)
+
         except Exception as e:
             logging.error(f"Error training {name}: {e}")
 
@@ -86,23 +115,28 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     # -------------------
     logging.info("Evaluating Unsupervised Models (outliers/clusters as 'fraud')")
 
-    # Isolation Forest using continuous anomaly scores evaluation
+    # Isolation Forest – uses continuous anomaly scores
     try:
         iso_forest = IsolationForest(contamination=0.01, random_state=42)
         iso_forest.fit(X_train)
-        evaluate_unsupervised_model(iso_forest, X_test, y_test, model_name="Isolation Forest")
+        evaluate_unsupervised_model(
+            iso_forest,
+            X_test,
+            y_test,
+            model_name="Isolation Forest",
+        )
     except Exception as e:
         logging.error(f"Error training Isolation Forest: {e}")
 
-    # K-Means: For clustering, we continue using hard predictions
+    # K‑Means – still evaluated via hard predictions
     try:
         kmeans = KMeans(n_clusters=2, random_state=42)
         kmeans.fit(X_train)
         y_pred_km = kmeans.predict(X_test)
-        # Assume cluster "1" = fraud, "0" = not fraud
-        evaluate_model(y_test, y_pred_km, "K-Means")
+        # Assume cluster “1” → fraud, “0” → non‑fraud
+        evaluate_model(y_test, y_pred_km, model_name="K‑Means")
     except Exception as e:
-        logging.error(f"Error training K-Means: {e}")
+        logging.error(f"Error training K‑Means: {e}")
 
 
 def hyperparameter_tuning_rf(X_train, X_test, y_train, y_test):
