@@ -74,7 +74,6 @@ def make_preprocessor(df, target="fraud_reported"):
         remainder="drop",
         verbose_feature_names_out=False,
     )
-
 # ═══════════════════════════════════════════════════════════════
 # Main workflow
 # ═══════════════════════════════════════════════════════════════
