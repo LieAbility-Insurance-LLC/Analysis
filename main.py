@@ -8,7 +8,7 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 # ──────────────────────────────────────────────────────────
-# Matplotlib – use non‑GUI backend and auto‑save every figure
+# Matplotlib  use non‑GUI backend and auto‑save every figure
 # ──────────────────────────────────────────────────────────
 import joblib
 import matplotlib
@@ -23,7 +23,7 @@ _plot_counter = {"i": 0}
 
 def _save_and_close(*_args, **_kwargs):
     """
-    Replacement for plt.show() – saves the current figure and closes it.
+    Replacement for plt.show() saves the current figure and closes it.
     """
     idx = _plot_counter["i"]
     fname = FIG_DIR / f"fig_{idx:03d}.png"
@@ -76,13 +76,13 @@ def main() -> None:
     # === 1 · Load ===========================================================
     df = load_dataset("insurance_claims.csv")
     if df.empty:
-        logging.error("Exiting – empty dataset.")
+        logging.error("Exiting  empty dataset.")
         return
 
     # === 2 · Sanity check ===================================================
     must_have = ["months_as_customer", "age", "policy_number", "fraud_reported"]
     if not validate_required_columns(df, must_have):
-        logging.error("Exiting – required columns missing.")
+        logging.error("Exiting  required columns missing.")
         return
 
     # === 3 · Pre‑process ====================================================
@@ -108,7 +108,7 @@ def main() -> None:
     try:
         X, y = SMOTE(random_state=42).fit_resample(X, y)
     except Exception as e:
-        logging.error(f"SMOTE failed: {e} – continuing without resampling.")
+        logging.error(f"SMOTE failed: {e}  continuing without resampling.")
 
     X_tr, X_te, y_tr, y_te = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
@@ -124,7 +124,7 @@ def main() -> None:
     try:
         iso = IsolationForest(contamination=0.01, random_state=42).fit(X_tr)
         evaluate_unsupervised_model(
-            iso, X_te, y_te, model_name="Isolation Forest (stand‑alone)"
+            iso, X_te, y_te, model_name="Isolation Forest (stand alone)"
         )
     except Exception as e:
         logging.error(f"Isolation Forest error: {e}")

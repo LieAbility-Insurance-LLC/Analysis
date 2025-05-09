@@ -80,20 +80,16 @@ def preprocess_data(
 
 
 # ──────────────────────────────────────────────────────────
-# Quick‑and‑dirty EDA helpers
+# Quick-and-dirty EDA helpers
 # ──────────────────────────────────────────────────────────
 def eda_plots(
     df: pd.DataFrame,
     target_column: str = "fraud_reported",
     corr_cols: Optional[List[str]] = None,
 ):
-    """
-    Generates a class‑distribution bar chart and a numeric‑feature
-    correlation heat‑map (restricted to the columns supplied in
-    `corr_cols`; defaults to *all* numeric predictors).
-    """
+
     if df.empty:
-        logging.warning("EDA skipped – DataFrame is empty.")
+        logging.warning("EDA skipped - DataFrame is empty.")
         return
 
     # 1) Class distribution
@@ -103,13 +99,13 @@ def eda_plots(
     plt.tight_layout()
     plt.show()
 
-    # 2) Correlation heat‑map
+    # 2) Correlation heat-map
     if corr_cols is None:
         corr_cols = df.select_dtypes("number").columns.tolist()
 
     corr_cols = [c for c in corr_cols if c in df.columns]
     if len(corr_cols) < 2:
-        logging.warning("Not enough numeric columns for a correlation heat‑map.")
+        logging.warning("Not enough numeric columns for a correlation heat-map.")
         return
 
     corr = df[corr_cols].corr()
@@ -123,13 +119,13 @@ def eda_plots(
         square=True,
         cbar_kws={"shrink": 0.75},
     )
-    plt.title(f"Correlation Heat‑map ({len(corr_cols)} numeric predictors)")
+    plt.title(f"Correlation Heat-map ({len(corr_cols)} numeric predictors)")
     plt.tight_layout()
     plt.show()
 
 
 # ──────────────────────────────────────────────────────────
-# NEW (2025‑05‑07) – helper for advanced violin plots
+# NEW (2025-05-07) – helper for advanced violin plots
 # ──────────────────────────────────────────────────────────
 def show_top_feature_violin_plots(
     df: pd.DataFrame,
@@ -137,12 +133,12 @@ def show_top_feature_violin_plots(
     target: str = "fraud_reported",
 ):
     """
-    Quickly surface distributional differences for the *top‑N* numeric
-    predictors with the highest variance. Calls the violin‑plot routine
+    Quickly surface distributional differences for the *top-N* numeric
+    predictors with the highest variance. Calls the violin-plot routine
     defined in `evaluation.py`.
     """
     if df.empty:
-        logging.warning("Violin‑plot helper skipped – DataFrame is empty.")
+        logging.warning("Violin-plot helper skipped - DataFrame is empty.")
         return
 
     # Lazy import to avoid circular dependency if evaluation also needs preprocessing
