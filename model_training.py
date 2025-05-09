@@ -108,7 +108,6 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     # 1 · Supervised models
     # ============================================================
     models_sup = {
-        # ------ baseline stack (kept) ---------------------------
         "Logistic Regression": LogisticRegression(max_iter=200, random_state=42),
         "Decision Tree": DecisionTreeClassifier(max_depth=None, random_state=42),
         "Random Forest": RandomForestClassifier(random_state=42),
@@ -134,7 +133,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
                 y_score = y_pred.astype(float)
 
             plot_pr_curve(y_test, y_score, model_name=name)
-            plot_calibration_curve(model, X_test, y_test, model_name=name)
+            #plot_calibration_curve(model, X_test, y_test, model_name=name)
             plot_cumulative_gain(y_test, y_score, model_name=name)
         except Exception as exc:
             logging.error(f"{name} failed: {exc}")
