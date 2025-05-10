@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import shap
+import pandas as pd
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -38,6 +39,7 @@ sns.set_palette(PALETTE)
 # ──────────────────────────────────────────────────────────
 # Core metrics + classic plots
 # ──────────────────────────────────────────────────────────
+
 def _plot_confusion_heatmap(cm: np.ndarray, model_name: str) -> None:
     """Nicely annotated confusion-matrix heat-map."""
     plt.figure(figsize=(4, 3))
@@ -60,7 +62,7 @@ def _plot_confusion_heatmap(cm: np.ndarray, model_name: str) -> None:
 def evaluate_model(y_true, y_pred, model_name: str = "Model") -> None:
     """
     Print classic numeric metrics **and** auto-draw a confusion-matrix heat-map.
-    Signature unchanged – down-stream calls stay intact.
+    Signature unchanged - down-stream calls stay intact.
     """
     logging.info(f"── {model_name} Evaluation ──")
     cm = confusion_matrix(y_true, y_pred)
@@ -71,7 +73,7 @@ def evaluate_model(y_true, y_pred, model_name: str = "Model") -> None:
 
     try:
         roc_auc = roc_auc_score(y_true, y_pred)
-        logging.info(f"{model_name} ROC-AUC ≈ {roc_auc:.4f}")
+        logging.info(f"{model_name} ROC-AUC ≈{roc_auc:.4f}")
     except ValueError as exc:
         logging.warning(f"ROC-AUC unavailable → {exc}")
 
@@ -79,12 +81,13 @@ def evaluate_model(y_true, y_pred, model_name: str = "Model") -> None:
 # ──────────────────────────────────────────────────────────
 # SHAP explainability (unchanged API, nicer defaults)
 # ──────────────────────────────────────────────────────────
+
 def explain_model_shap(model, X_test):
     """
     SHAP summary-bar + force plot for the first observation.
     """
     if not hasattr(shap, "TreeExplainer"):
-        logging.warning("SHAP unavailable – skipping explainability.")
+        logging.warning("SHAP unavailable - skipping explainability.")
         return
 
     try:
@@ -114,6 +117,7 @@ def explain_model_shap(model, X_test):
 # ──────────────────────────────────────────────────────────
 # ROC / PR / Calibration / Gain curves
 # ──────────────────────────────────────────────────────────
+
 def plot_pr_curve(y_true, y_score, model_name: str = "Model"):
     """Precision–Recall curve with shaded area = Average Precision."""
     precision, recall, _ = precision_recall_curve(y_true, y_score)
@@ -137,11 +141,18 @@ def plot_calibration_curve(
     if not hasattr(model, "predict_proba"):
         return
     prob_pos = model.predict_proba(X_test)[:, 1]
-    frac_pos, mean_pred = calibration_curve(y_test, prob_pos, n_bins=n_bins, strategy="quantile")
+    frac_pos, mean_pred = calibration_curve(
+        y_test, prob_pos, n_bins=n_bins, strategy="quantile"
+    )
 
     plt.figure()
-    plt.errorbar(mean_pred, frac_pos, yerr=np.sqrt(frac_pos * (1 - frac_pos) / len(y_test)),
-                 fmt="o", capsize=3)
+    plt.errorbar(
+        mean_pred,
+        frac_pos,
+        yerr=np.sqrt(frac_pos * (1 - frac_pos) / len(y_test)),
+        fmt="o",
+        capsize=3,
+    )
     plt.plot([0, 1], [0, 1], "k--", alpha=0.5)
     plt.xlabel("Mean predicted probability")
     plt.ylabel("Fraction of positives")
@@ -164,8 +175,8 @@ def plot_cumulative_gain(y_true, y_score, model_name: str = "Model"):
     plt.fill_between(perc_population, gain, perc_population, alpha=0.15)
     plt.plot(perc_population, gain, linewidth=2, label="Model")
     plt.plot([0, 1], [0, 1], "k--", label="Random")
-    plt.xlabel("% of population reviewed")
-    plt.ylabel("% of frauds captured")
+    plt.xlabel("% of population reviewed")
+    plt.ylabel("% of frauds captured")
     plt.title(f"Cumulative Gain · {model_name}")
     plt.legend()
     plt.tight_layout()
@@ -175,10 +186,9 @@ def plot_cumulative_gain(y_true, y_score, model_name: str = "Model"):
 # ──────────────────────────────────────────────────────────
 # NEW diagnostics
 # ──────────────────────────────────────────────────────────
+
 def plot_lift_curve(y_true, y_score, model_name: str = "Model"):
-    """
-    Lift curve = model gain / random gain.
-    """
+    """Lift curve = model gain / random gain."""
     order = np.argsort(-y_score)
     y_true_sorted = np.array(y_true)[order]
 
@@ -199,9 +209,7 @@ def plot_lift_curve(y_true, y_score, model_name: str = "Model"):
 
 
 def plot_probability_distribution(y_true, y_score, model_name: str = "Model"):
-    """
-    Histogram / KDE of predicted probabilities broken out by class.
-    """
+    """Histogram / KDE of predicted probabilities broken out by class."""
     plt.figure(figsize=(6, 4))
     sns.kdeplot(y_score[y_true == 0], label="Not Fraud", fill=True, alpha=0.3)
     sns.kdeplot(y_score[y_true == 1], label="Fraud", fill=True, alpha=0.3)
@@ -250,5 +258,62 @@ def plot_feature_distributions(df, top_features, target: str = "fraud_reported")
         )
         plt.title(col, fontsize=11)
         plt.xlabel("")
+    plt.tight_layout()
+    plt.show()
+
+
+# ──────────────────────────────────────────────────────────
+#  Cluster visualisation helpers
+# ──────────────────────────────────────────────────────────
+
+def plot_cluster_embedding(
+    X,
+    cluster_labels: Sequence[int],
+    algorithm_name: str = "Clustering",
+    method: str = "tsne",
+):
+    """2-D embedding (t-SNE or PCA) coloured by cluster labels / noise."""
+
+    # 1 · Sanity + to-array ----------------------------------------------------
+    if isinstance(X, (pd.DataFrame, pd.Series)):
+        X_vals = X.values
+    else:
+        X_vals = np.asarray(X)
+
+    # 2 · Low-dim embedding ----------------------------------------------------
+    if method.lower() == "pca":
+        from sklearn.decomposition import PCA
+
+        emb = PCA(n_components=2, random_state=42).fit_transform(X_vals)
+        title = "PCA"
+    else:
+        tsne = TSNE(n_components=2, init="pca", random_state=42, perplexity=30)
+        emb = tsne.fit_transform(X_vals)
+        title = "t-SNE"
+
+    # 3 · Colour palette -------------------------------------------------------
+    labels = np.asarray(cluster_labels)
+    unique = np.unique(labels)
+    n_clusters = len(unique[unique != -1])
+    palette = sns.color_palette("husl", max(n_clusters, 2))
+
+    def _label_colour(lbl):
+        return "#999999" if lbl == -1 else palette[int(lbl) % n_clusters]
+
+    colours = list(map(_label_colour, labels))
+
+    # 4 · Plot ---------------------------------------------------------------
+    plt.figure(figsize=(6, 5))
+    plt.scatter(emb[:, 0], emb[:, 1], c=colours, s=18, alpha=0.8, linewidths=0)
+    plt.title(f"{title} Cluster Map · {algorithm_name}")
+
+    # 5 · Legend -------------------------------------------------------------
+    handles = []
+    for lbl in unique:
+        colour = _label_colour(lbl)
+        name = "Noise" if lbl == -1 else f"Cluster {lbl}"
+        handles.append(plt.Line2D([], [], marker="o", color=colour, linestyle="", label=name))
+    plt.legend(handles=handles, title="Label", loc="best", frameon=True, fontsize="small")
+
     plt.tight_layout()
     plt.show()

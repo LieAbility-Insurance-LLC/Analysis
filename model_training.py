@@ -31,6 +31,7 @@ from evaluation import (
     plot_pr_curve,
     plot_calibration_curve,
     plot_cumulative_gain,
+    plot_cluster_embedding,        # ← NEW
 )
 
 # ────────────────────────────────────────────────────────────────
@@ -43,16 +44,18 @@ def _plot_roc_pr_curves(y_true, scores, model_name: str):
     precision, recall, _ = precision_recall_curve(y_true, scores)
     ap = average_precision_score(y_true, scores)
 
+    # ROC
     plt.figure()
     plt.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.2f}")
-    plt.plot([0, 1], [0, 1], "k--")
-    plt.xlabel("FPR")
-    plt.ylabel("TPR")
+    plt.plot([0, 1], [0, 1], "k--", alpha=0.4)
+    plt.xlabel("False-Positive Rate")
+    plt.ylabel("True-Positive Rate")
     plt.title(f"ROC Curve · {model_name}")
     plt.legend()
     plt.tight_layout()
     plt.show()
 
+    # PR
     plt.figure()
     plt.plot(recall, precision, label=f"AP = {ap:.2f}")
     plt.xlabel("Recall")
@@ -65,7 +68,7 @@ def _plot_roc_pr_curves(y_true, scores, model_name: str):
 
 def evaluate_unsupervised_model(model, X_test, y_test, model_name="Unsupervised Model"):
     """
-    Evaluate an outlier -detection model that provides *continuous* anomaly scores
+    Evaluate an outlier‑detection model that provides *continuous* anomaly scores
     via ``decision_function`` or ``score_samples``. Higher score → more anomalous.
     """
     # 1 · scores --------------------------------------------------
@@ -87,12 +90,12 @@ def evaluate_unsupervised_model(model, X_test, y_test, model_name="Unsupervised 
     _plot_roc_pr_curves(y_test, scores, model_name)
 
 
-def _evaluate_dbscan(dbscan_labels, y_test, model_name="DBSCAN"):
+def _evaluate_dbscan(dbscan_labels, y_true, model_name="DBSCAN"):
     """
     DBSCAN produces cluster labels; -1 denotes noise. Treat noise → fraud.
     """
     y_pred = (dbscan_labels == -1).astype(int)
-    evaluate_model(y_test, y_pred, model_name=model_name)
+    evaluate_model(y_true, y_pred, model_name=model_name)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -101,15 +104,15 @@ def _evaluate_dbscan(dbscan_labels, y_test, model_name="DBSCAN"):
 def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     """
     Runs a battery of supervised + unsupervised models and logs / plots
-    their performance. Keeps the original Random Forest + XGBoost stack
-    but widens coverage with simple, explainable learners.
+    their performance. Keeps the original RF + XGB stack, adds simple
+    learners and rich cluster visualisations.
     """
     # ============================================================
     # 1 · Supervised models
     # ============================================================
     models_sup = {
         "Logistic Regression": LogisticRegression(max_iter=200, random_state=42),
-        "Decision Tree": DecisionTreeClassifier(max_depth=None, random_state=42),
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
         "Random Forest": RandomForestClassifier(random_state=42),
         "Gradient Boosting": GradientBoostingClassifier(random_state=42),
         "XGBoost": XGBClassifier(
@@ -133,23 +136,21 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
                 y_score = y_pred.astype(float)
 
             plot_pr_curve(y_test, y_score, model_name=name)
-            #plot_calibration_curve(model, X_test, y_test, model_name=name)
+            # plot_calibration_curve(model, X_test, y_test, model_name=name)  # optional
             plot_cumulative_gain(y_test, y_score, model_name=name)
         except Exception as exc:
             logging.error(f"{name} failed: {exc}")
 
     # ============================================================
-    # 2 · Unsupervised / Anomaly -detection models
+    # 2 · Unsupervised / Anomaly‑detection models
     # ============================================================
     logging.info("🛰 Evaluating unsupervised models (outliers = fraud)…")
 
-    # ---------- Isolation Forest (kept) --------------------------
+    # ---------- Isolation Forest --------------------------------
     try:
         iso = IsolationForest(contamination=0.01, random_state=42)
         iso.fit(X_train)
-        evaluate_unsupervised_model(
-            iso, X_test, y_test, model_name="Isolation Forest"
-        )
+        evaluate_unsupervised_model(iso, X_test, y_test, model_name="Isolation Forest")
     except Exception as exc:
         logging.error(f"Isolation Forest error: {exc}")
 
@@ -163,22 +164,24 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     except Exception as exc:
         logging.error(f"Local Outlier Factor error: {exc}")
 
-    # ---------- One -Class SVM -----------------------------------
+    # ---------- One‑Class SVM -----------------------------------
     try:
         ocsvm = OneClassSVM(kernel="rbf", nu=0.05, gamma="auto")
         ocsvm.fit(X_train)
-        evaluate_unsupervised_model(ocsvm, X_test, y_test, model_name="One-Class SVM")
+        evaluate_unsupervised_model(ocsvm, X_test, y_test, model_name="One‑Class SVM")
     except Exception as exc:
-        logging.error(f"One-Class SVM error: {exc}")
+        logging.error(f"One‑Class SVM error: {exc}")
 
-    # ---------- K -Means  (binary cluster) -----------------------
+    # ---------- K‑Means  (binary cluster) -----------------------
     try:
         km = KMeans(n_clusters=2, random_state=42)
         km.fit(X_train)
         y_pred_km = km.predict(X_test)
-        evaluate_model(y_test, y_pred_km, model_name="K -Means (2-cluster)")
+        evaluate_model(y_test, y_pred_km, model_name="K-Means (2-cluster)")
+        # NEW visual
+        plot_cluster_embedding(X_test, y_pred_km, algorithm_name="K-Means")
     except Exception as exc:
-        logging.error(f"K -Means error: {exc}")
+        logging.error(f"K-Means error: {exc}")
 
     # ---------- DBSCAN  (density clustering) --------------------
     try:
@@ -188,21 +191,20 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
 
         db_test_lbl = db.fit_predict(X_test)  # fit on test to get labels
         _evaluate_dbscan(db_test_lbl, y_test, model_name="DBSCAN (test)")
+        # NEW visual
+        plot_cluster_embedding(X_test, db_test_lbl, algorithm_name="DBSCAN")
     except Exception as exc:
         logging.error(f"DBSCAN error: {exc}")
 
 
 # ────────────────────────────────────────────────────────────────
-# 3 · Random Forest hyper -tuning helper (unchanged)
+# 3 · Random Forest hyper‑tuning helper
 # ────────────────────────────────────────────────────────────────
 from sklearn.model_selection import GridSearchCV
 
 
 def hyperparameter_tuning_rf(X_train, X_test, y_train, y_test):
-    """
-    Simple GridSearch over a handful of RF hyper -parameters.
-    Returns the best estimator or None on failure.
-    """
+    """Simple GridSearch over a handful of RF hyper-parameters."""
     grid = {
         "n_estimators": [100, 200],
         "max_depth": [None, 10, 20],
