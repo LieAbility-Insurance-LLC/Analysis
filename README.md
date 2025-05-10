@@ -52,7 +52,7 @@ Although the reference dataset is an anonymised CSV (`insurance_claims.csv`), th
 
 ```bash
 # clone the repo
-$ git clone https://github.com/your‑org/insurance‑fraud‑ml.git
+$ git clone https://github.com/LieAbility-Insurance-LLC/Analysis.git
 $ cd insurance‑fraud‑ml
 
 # create virtual env (recommended)
