@@ -31,22 +31,23 @@ from evaluation import (
     plot_pr_curve,
     plot_calibration_curve,
     plot_cumulative_gain,
-    plot_cluster_embedding,        # ← NEW
+    plot_cluster_embedding,
 )
 
 # ────────────────────────────────────────────────────────────────
 # Generic helpers
 # ────────────────────────────────────────────────────────────────
+
 def _plot_roc_pr_curves(y_true, scores, model_name: str):
-    """Utility for ROC & PR curves when we only have continuous scores."""
+    """Draw ROC **and** PR curves from continuous scores."""
     roc_auc = roc_auc_score(y_true, scores)
     fpr, tpr, _ = roc_curve(y_true, scores)
     precision, recall, _ = precision_recall_curve(y_true, scores)
     ap = average_precision_score(y_true, scores)
 
-    # ROC
+    # ----- ROC --------------------------------------------------
     plt.figure()
-    plt.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.2f}")
+    plt.plot(fpr, tpr, linewidth=2, label=f"AUC = {roc_auc:.2f}")
     plt.plot([0, 1], [0, 1], "k--", alpha=0.4)
     plt.xlabel("False-Positive Rate")
     plt.ylabel("True-Positive Rate")
@@ -55,58 +56,50 @@ def _plot_roc_pr_curves(y_true, scores, model_name: str):
     plt.tight_layout()
     plt.show()
 
-    # PR
+    # ----- PR ---------------------------------------------------
     plt.figure()
-    plt.plot(recall, precision, label=f"AP = {ap:.2f}")
+    plt.plot(recall, precision, linewidth=2, label=f"AP = {ap:.2f}")
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.title(f"Precision-Recall · {model_name}")
+    plt.title(f"Precision–Recall · {model_name}")
     plt.legend()
     plt.tight_layout()
     plt.show()
 
 
+# ────────────────────────────────────────────────────────────────
+# Unsupervised evaluation helpers
+# ────────────────────────────────────────────────────────────────
+
 def evaluate_unsupervised_model(model, X_test, y_test, model_name="Unsupervised Model"):
-    """
-    Evaluate an outlier‑detection model that provides *continuous* anomaly scores
-    via ``decision_function`` or ``score_samples``. Higher score → more anomalous.
-    """
-    # 1 · scores --------------------------------------------------
+    """Evaluate an outlier-detection model and draw ROC/PR curves."""
     if hasattr(model, "decision_function"):
         scores = model.decision_function(X_test)
     elif hasattr(model, "score_samples"):
-        scores = -model.score_samples(X_test)  # invert: high = outlier
+        scores = -model.score_samples(X_test)  # invert: high = outlier
     else:
-        raise ValueError(
-            f"{model_name} has no decision_function / score_samples interface."
-        )
+        raise ValueError(f"{model_name} exposes no usable score interface.")
 
-    # 2 · threshold → hard labels (median is a quick heuristic)
     thresh = np.median(scores)
-    y_pred = (scores >= thresh).astype(int)  # 1 = anomaly / fraud
+    y_pred = (scores >= thresh).astype(int)
 
-    # 3 · metrics -------------------------------------------------
     evaluate_model(y_test, y_pred, model_name=model_name)
     _plot_roc_pr_curves(y_test, scores, model_name)
 
 
 def _evaluate_dbscan(dbscan_labels, y_true, model_name="DBSCAN"):
-    """
-    DBSCAN produces cluster labels; -1 denotes noise. Treat noise → fraud.
-    """
+    """Treat DBSCAN noise (-1) as fraud; evaluate as binary classifier."""
     y_pred = (dbscan_labels == -1).astype(int)
     evaluate_model(y_true, y_pred, model_name=model_name)
 
 
 # ────────────────────────────────────────────────────────────────
-# Primary API called from main.py / Streamlit
+# Main entry‑point for training + evaluation
 # ────────────────────────────────────────────────────────────────
+
 def train_and_evaluate_models(X_train, X_test, y_train, y_test):
-    """
-    Runs a battery of supervised + unsupervised models and logs / plots
-    their performance. Keeps the original RF + XGB stack, adds simple
-    learners and rich cluster visualisations.
-    """
+    """Run supervised **and** unsupervised models + rich plots."""
+
     # ============================================================
     # 1 · Supervised models
     # ============================================================
@@ -127,7 +120,7 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
             y_pred = model.predict(X_test)
             evaluate_model(y_test, y_pred, model_name=name)
 
-            # --- curves ----------------------------------------
+            # Continuous score for curves ----------------------------------
             if hasattr(model, "predict_proba"):
                 y_score = model.predict_proba(X_test)[:, 1]
             elif hasattr(model, "decision_function"):
@@ -136,17 +129,16 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
                 y_score = y_pred.astype(float)
 
             plot_pr_curve(y_test, y_score, model_name=name)
-            # plot_calibration_curve(model, X_test, y_test, model_name=name)  # optional
             plot_cumulative_gain(y_test, y_score, model_name=name)
         except Exception as exc:
             logging.error(f"{name} failed: {exc}")
 
     # ============================================================
-    # 2 · Unsupervised / Anomaly‑detection models
+    # 2 · Unsupervised / anomaly‑detection models
     # ============================================================
     logging.info("🛰 Evaluating unsupervised models (outliers = fraud)…")
 
-    # ---------- Isolation Forest --------------------------------
+    # Isolation  Forest ------------------------------------------------------
     try:
         iso = IsolationForest(contamination=0.01, random_state=42)
         iso.fit(X_train)
@@ -154,57 +146,52 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test):
     except Exception as exc:
         logging.error(f"Isolation Forest error: {exc}")
 
-    # ---------- Local Outlier Factor ----------------------------
+    # Local  Outlier  Factor --------------------------------------------------
     try:
         lof = LocalOutlierFactor(n_neighbors=20, novelty=True)
         lof.fit(X_train)
-        evaluate_unsupervised_model(
-            lof, X_test, y_test, model_name="Local Outlier Factor"
-        )
+        evaluate_unsupervised_model(lof, X_test, y_test, model_name="Local Outlier Factor")
     except Exception as exc:
         logging.error(f"Local Outlier Factor error: {exc}")
 
-    # ---------- One‑Class SVM -----------------------------------
+    # One‑Class SVM ---------------------------------------------------------
     try:
         ocsvm = OneClassSVM(kernel="rbf", nu=0.05, gamma="auto")
         ocsvm.fit(X_train)
-        evaluate_unsupervised_model(ocsvm, X_test, y_test, model_name="One‑Class SVM")
+        evaluate_unsupervised_model(ocsvm, X_test, y_test, model_name="One-Class SVM")
     except Exception as exc:
-        logging.error(f"One‑Class SVM error: {exc}")
+        logging.error(f"One-Class SVM error: {exc}")
 
-    # ---------- K‑Means  (binary cluster) -----------------------
+    # K‑Means (binary) ------------------------------------------------------
     try:
         km = KMeans(n_clusters=2, random_state=42)
         km.fit(X_train)
         y_pred_km = km.predict(X_test)
         evaluate_model(y_test, y_pred_km, model_name="K-Means (2-cluster)")
-        # NEW visual
         plot_cluster_embedding(X_test, y_pred_km, algorithm_name="K-Means")
     except Exception as exc:
         logging.error(f"K-Means error: {exc}")
 
-    # ---------- DBSCAN  (density clustering) --------------------
+    # DBSCAN ---------------------------------------------------------------
     try:
         db = DBSCAN(eps=0.7, min_samples=10)
         db.fit(X_train)
         _evaluate_dbscan(db.labels_, y_train, model_name="DBSCAN (train)")
 
-        db_test_lbl = db.fit_predict(X_test)  # fit on test to get labels
+        db_test_lbl = db.fit_predict(X_test)
         _evaluate_dbscan(db_test_lbl, y_test, model_name="DBSCAN (test)")
-        # NEW visual
         plot_cluster_embedding(X_test, db_test_lbl, algorithm_name="DBSCAN")
     except Exception as exc:
         logging.error(f"DBSCAN error: {exc}")
 
 
 # ────────────────────────────────────────────────────────────────
-# 3 · Random Forest hyper‑tuning helper
+# 3 · Random  Forest hyper‑tuning + ROC curve
 # ────────────────────────────────────────────────────────────────
 from sklearn.model_selection import GridSearchCV
 
-
 def hyperparameter_tuning_rf(X_train, X_test, y_train, y_test):
-    """Simple GridSearch over a handful of RF hyper-parameters."""
+    """GridSearch a Random  Forest and *plot ROC* for best estimator."""
     grid = {
         "n_estimators": [100, 200],
         "max_depth": [None, 10, 20],
@@ -221,8 +208,19 @@ def hyperparameter_tuning_rf(X_train, X_test, y_train, y_test):
         gs.fit(X_train, y_train)
         best = gs.best_estimator_
         logging.info(f"Best RF params → {gs.best_params_}")
+
+        # ----- Predict + standard metrics -----------------------
         y_pred = best.predict(X_test)
         evaluate_model(y_test, y_pred, model_name="Tuned Random Forest")
+
+        # ----- ROC / PR / Gain ----------------------------------
+        try:
+            y_score = best.predict_proba(X_test)[:, 1]
+        except AttributeError:
+            y_score = y_pred.astype(float)
+
+        _plot_roc_pr_curves(y_test, y_score, model_name="Tuned Random Forest")
+        plot_cumulative_gain(y_test, y_score, model_name="Tuned Random Forest")
         return best
     except Exception as exc:
         logging.error(f"RF tuning failed: {exc}")

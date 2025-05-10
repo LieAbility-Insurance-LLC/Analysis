@@ -41,7 +41,7 @@ from evaluation import explain_model_shap, plot_lift_curve
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y‑%m‑%d %H:%M:%S",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 warnings.filterwarnings("ignore")
 MODELS_DIR = Path("models"); MODELS_DIR.mkdir(exist_ok=True)
@@ -145,7 +145,7 @@ def main() -> None:
     for name, mdl in candidates.items():
         proba = mdl.predict_proba(X_te)[:, 1]
         auc   = roc_auc_score(y_te, proba)
-        logging.info(f"{name:<15} ROC‑AUC = {auc:0.4f}")
+        logging.info(f"{name:<15} ROC-AUC = {auc:0.4f}")
         if auc > best_auc: best_name, best_auc, best_model = name, auc, mdl
 
     # 10 · Explainability + lift
