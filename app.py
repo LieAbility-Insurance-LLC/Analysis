@@ -1,6 +1,3 @@
-# ──────────────────────────────────────────────────────────
-# Insurance‑Fraud Streamlit Dashboard · app.py  (v3.0.1 · 2025‑05‑09)
-# ──────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import io, logging, warnings
@@ -20,7 +17,7 @@ from sklearn.model_selection import train_test_split
 # ──────────────────────────────────────────────────────────
 # FIRST Streamlit command
 # ──────────────────────────────────────────────────────────
-st.set_page_config(page_title="Fraud Dashboard", page_icon="🚦", layout="wide")
+st.set_page_config(page_title="Fraud Dashboard", page_icon="🚦", layout="wide")
 
 # ──────────────────────────────────────────────────────────
 # Silence noisy warnings
@@ -32,10 +29,10 @@ pd.options.mode.chained_assignment = None
 # ──────────────────────────────────────────────────────────
 # Project imports
 # ──────────────────────────────────────────────────────────
-from evaluation import explain_model_shap, plot_tsne_embedding
+from evaluation import explain_model_shap
 from feature_engineering import feature_engineering
 from model_training import hyperparameter_tuning_rf, train_and_evaluate_models
-from preprocessing import preprocess_data, show_top_feature_violin_plots
+from preprocessing import preprocess_data
 
 # ──────────────────────────────────────────────────────────
 # Paths / constants
@@ -100,7 +97,7 @@ section.main > div {box-shadow:0 0 8px rgba(0,0,0,0.07);}
 # ──────────────────────────────────────────────────────────
 # Title
 # ──────────────────────────────────────────────────────────
-st.title("🚦 Insurance Claim Fraud Detection Dashboard")
+st.title("🚦Insurance Claim Fraud Detection Dashboard")
 
 # ──────────────────────────────────────────────────────────
 # Session state shortcuts
@@ -134,7 +131,7 @@ tabs = st.tabs(
 # 1 · Upload or auto‑load default CSV
 # ──────────────────────────────────────────────────────────
 with tab_upload:
-    st.header("📁 Dataset Loader")
+    st.header("📁Dataset Loader")
     if ss.raw is None and DEFAULT_CSV.exists():
         ss.raw = pd.read_csv(DEFAULT_CSV)
         st.toast(f'Loaded "{DEFAULT_CSV}" automatically.', icon="⚡")
@@ -150,7 +147,7 @@ with tab_upload:
 # 2 · EDA
 # ──────────────────────────────────────────────────────────
 with tab_eda:
-    st.header("🔬 Exploratory Data Analysis")
+    st.header("🔬Exploratory Data Analysis")
     if ss.raw is None:
         st.info("Load a dataset first.")
     else:
@@ -161,7 +158,7 @@ with tab_eda:
             st.subheader("Class balance")
             st.plotly_chart(fig, use_container_width=True)
         with c2:
-            st.subheader("Correlation heat‑map")
+            st.subheader("Correlation heat-map")
             num_cols = ss.raw.select_dtypes("number")
             if num_cols.shape[1] >= 2:
                 corr = num_cols.corr()
@@ -171,24 +168,11 @@ with tab_eda:
             else:
                 st.warning("Not enough numeric columns.")
 
-        st.divider()
-        st.subheader("⌛ Advanced Visuals")
-        if st.button("Generate t‑SNE + Violin plots"):
-            with st.spinner("Generating…"):
-                try:
-                    processed = cached_preprocess(ss.raw)
-                    X = processed.drop(columns=["fraud_reported"], errors="ignore")
-                    y = processed["fraud_reported"]
-                    plot_tsne_embedding(X, y, model_name="Preprocessed data")
-                    show_top_feature_violin_plots(processed, top_n=10)
-                except Exception as exc:
-                    st.error(f"Failed: {exc}")
-
 # ──────────────────────────────────────────────────────────
 # 3 · Preprocess
 # ──────────────────────────────────────────────────────────
 with tab_prep:
-    st.header("⚙️ Preprocess + Feature Engineering")
+    st.header("⚙️Preprocess+Feature Engineering")
     if ss.raw is None:
         st.info("Load a dataset first.")
     elif st.button("Run preprocessing"):
@@ -203,7 +187,7 @@ with tab_prep:
 # 4 · Train
 # ──────────────────────────────────────────────────────────
 with tab_train:
-    st.header("🧠 Model Training & Tuning")
+    st.header("🧠Model Training&Tuning")
     if ss.prep is None:
         st.info("Run preprocessing first.")
     else:
@@ -244,7 +228,7 @@ with tab_train:
 # 5 · Batch Predict
 # ──────────────────────────────────────────────────────────
 with tab_pred:
-    st.header("📊 Batch Prediction")
+    st.header("📊Batch Prediction")
     models_available = list_available_models()
     choice = st.selectbox("Choose a trained model", models_available)
     if choice and (ss.model_name != choice or ss.model is None):
@@ -276,7 +260,7 @@ with tab_pred:
 # 6 · 📝 Single Prediction
 # ──────────────────────────────────────────────────────────
 with tab_single:
-    st.header("📝 Single Prediction (Probability)")
+    st.header("📝Single Prediction (Probability)")
     if ss.model is None:
         st.error("Select or train a model first.")
     elif ss.raw is None:
@@ -359,7 +343,7 @@ with tab_single:
 # 7 · Explain
 # ──────────────────────────────────────────────────────────
 with tab_explain:
-    st.header("🔎 SHAP Explainability")
+    st.header("🔎SHAP Explainability")
     if ss.prep is None:
         st.info("Need preprocessed data.")
     elif ss.model is None:
