@@ -13,8 +13,6 @@
 5. [Usage Examples](#usage-examples)
 6. [Streamlit Dashboard](#streamlit-dashboard)
 7. [Extensibility](#extensibility)
-8. [License](#license)
-
 ---
 
 ## Project Overview
@@ -158,7 +156,3 @@ Add any scikit‑learn compatible estimator in **`model_training.py → models_s
 | New plots                       | Add matplotlib/Seaborn functions in `evaluation.py` – they auto‑save via the global `plt.show` monkey‑patch |
 
 ---
-
-## License
-
-Distributed under the **MIT License** – see [`LICENSE`](LICENSE) for details.
