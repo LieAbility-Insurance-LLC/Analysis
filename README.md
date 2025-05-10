@@ -13,9 +13,7 @@
 5. [Usage Examples](#usage-examples)
 6. [Streamlit Dashboard](#streamlit-dashboard)
 7. [Extensibility](#extensibility)
-8. [Citing This Work](#citing-this-work)
-9. [Contributing](#contributing)
-10. [License](#license)
+8. [License](#license)
 
 ---
 
