@@ -39,7 +39,7 @@ Although the reference dataset is an anonymised CSV (`insurance_claims.csv`), th
 | **Evaluation Suite** | Confusion heat‑maps, ROC, PR, lift, cumulative‑gain, calibration, probability densities                                                                                                            |
 | **Explainability**   | Global & local SHAP (bar + force plots)                                                                                                                                                            |
 | **Visual EDA**       | Class balance, correlation heat‑map, violin plots, t‑SNE projection                                                                                                                                |
-| **Dashboard**        | Zero‑code UI built with Streamlit → upload data, train, explain, predict, download results                                                                                                         |
+| **Dashboard**        | UI built with Streamlit → upload data, train, explain, predict, download results                                                                                                         |
 | **Modularity**       | Each stage lives in its own module (`preprocessing.py`, `evaluation.py`, …) for easy reuse                                                                                                         |
 
 ---
